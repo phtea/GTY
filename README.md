@@ -21,7 +21,7 @@ SuccessYaTrackerBot is a Telegram bot designed to interact with Yandex.Tracker, 
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/yourusername/SuccessYaTrackerBot.git
+git clone https://github.com/phtea/SuccessYaTrackerBot.git
 cd SuccessYaTrackerBot
 ```
 
