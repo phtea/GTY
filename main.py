@@ -253,10 +253,10 @@ def get_yandex_access_token_refresh(refresh_token) -> dict:
 
 
     logging.info(f"yandex refresh code response: {response.text}")
-    device_creds = json.loads(response.text)
+    device_creds    = json.loads(response.text)
 
-    access_token = device_creds['access_token']
-    refresh_token = device_creds['refresh_token']
+    access_token    = device_creds['access_token']
+    refresh_token   = device_creds['refresh_token']
 
     global YA_ACCESS_TOKEN
     os.environ["YA_ACCESS_TOKEN"]   = access_token
