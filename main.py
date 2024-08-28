@@ -23,6 +23,8 @@ DOTENV_PATH = os.path.join(os.path.dirname(__file__), '.env')
 if os.path.exists(DOTENV_PATH):
     dotenv.load_dotenv(DOTENV_PATH)
 
+
+# TODO: обработать незаполненные значения в .env
 TG_BOT_TOKEN        = os.environ.get("TG_BOT_TOKEN")
 YA_X_CLOUD_ORG_ID   = os.environ.get("YA_X_CLOUD_ORG_ID")
 YA_ACCESS_TOKEN     = os.environ.get("YA_ACCESS_TOKEN")
@@ -160,21 +162,8 @@ async def _fetch_tasks(access_token, login):
 def main() -> None:
     """Start the bot."""
 
-    yandex_access_token = YA_ACCESS_TOKEN
-    yandex_info_response = requests.post(
-        YA_INFO_TOKEN_URL,
-        data={
-            "oauth_token": yandex_access_token,
-            "format": "json",
-        },
-    )
-    if yandex_info_response.status_code == 200:
-        print("Welcome, " + json.loads(yandex_info_response.text)['login'] + "!")
-    else:
-        yandex_access_token = get_yandex_access_token_refresh(YA_REFRESH_TOKEN)
-
-
-
+    yandex_info_response = get_yandex_account_info(YA_ACCESS_TOKEN)
+    check_yandex_access_token(yandex_info_response)
 
     # Create the Application and pass it your bot's token.
     application = (
@@ -204,6 +193,36 @@ def main() -> None:
     # Run the bot until the user presses Ctrl-C
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
+
+
+def check_yandex_access_token(yandex_info_response) -> str:
+    """Recursive way to check if access token works.
+
+    Returns only when login was successful"""
+
+    if yandex_info_response.status_code == 200:
+        print("Welcome, " + json.loads(yandex_info_response.text)['login'] + "!")
+        return
+    else:
+        yandex_access_token = get_yandex_access_token_refresh(YA_REFRESH_TOKEN)
+        yandex_info_response = get_yandex_account_info(yandex_access_token)
+        check_yandex_access_token(yandex_info_response)
+
+def get_yandex_account_info(yandex_access_token) -> requests.Response:
+    """Gets yandex account info by giving out access_token
+    Usually used to check if access_token is still relevant or not
+    """
+
+    yandex_info_response = requests.post(
+        YA_INFO_TOKEN_URL,
+        data={
+            "oauth_token": yandex_access_token,
+            "format": "json",
+        },
+    )
+    
+    return yandex_info_response
+
 def get_yandex_access_token_captcha() -> str:
 
     # Handling code retrieved manually from yandex.
@@ -230,7 +249,10 @@ def get_yandex_access_token_captcha() -> str:
     return yandex_access_token
 
 def get_yandex_access_token_refresh(refresh_token) -> dict:
-    """Refresh access_token using refresh_token"""
+    """ Refresh access_token using refresh_token,
+        update global variables and
+        save changes to .env file
+    """
 
 
     payload = {
@@ -259,14 +281,14 @@ def get_yandex_access_token_refresh(refresh_token) -> dict:
     refresh_token   = device_creds['refresh_token']
 
     global YA_ACCESS_TOKEN
-    os.environ["YA_ACCESS_TOKEN"]   = access_token
     YA_ACCESS_TOKEN                 = access_token
+    os.environ["YA_ACCESS_TOKEN"]   = access_token
     dotenv.set_key(DOTENV_PATH, "YA_ACCESS_TOKEN", os.environ["YA_ACCESS_TOKEN"])
 
 
     global YA_REFRESH_TOKEN
-    os.environ["YA_REFRESH_TOKEN"]  = refresh_token
     YA_REFRESH_TOKEN                = refresh_token
+    os.environ["YA_REFRESH_TOKEN"]  = refresh_token
     dotenv.set_key(DOTENV_PATH, "YA_REFRESH_TOKEN", os.environ["YA_REFRESH_TOKEN"])
 
     return access_token
