@@ -186,7 +186,7 @@ def main() -> None:
 
     # Add fetch tasks handler to show current tasks details
     async def tasks_caller(*args, **kwargs):
-        await tasks(*args, access_token=yandex_access_token, **kwargs)
+        await tasks(*args, access_token=YA_ACCESS_TOKEN, **kwargs)
 
     application.add_handler(CommandHandler("tasks", tasks_caller))
 
