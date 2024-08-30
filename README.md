@@ -1,5 +1,10 @@
 ## README.md
 
+# TODO
+- [] обработать незаполненные значения в .env
+- [] добавить модуль пагинации (постраничный вывод) задач
+- [] выделить функционал по API Yandex в отдельный модуль
+
 # SuccessYaTrackerTGBot
 
 SuccessYaTrackerTGBot is a Telegram bot designed to interact with Yandex.Tracker, allowing users to fetch and display tasks assigned to them. The bot is built using Python, the Telegram API, and the Yandex OAuth API for authentication and task management.

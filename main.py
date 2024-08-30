@@ -23,7 +23,6 @@ DOTENV_PATH = os.path.join(os.path.dirname(__file__), '.env')
 if os.path.exists(DOTENV_PATH):
     dotenv.load_dotenv(DOTENV_PATH)
 
-
 # TODO: обработать незаполненные значения в .env
 TG_BOT_TOKEN        = os.environ.get("TG_BOT_TOKEN")
 YA_X_CLOUD_ORG_ID   = os.environ.get("YA_X_CLOUD_ORG_ID")
@@ -31,7 +30,6 @@ YA_ACCESS_TOKEN     = os.environ.get("YA_ACCESS_TOKEN")
 YA_CLIENT_ID        = os.environ.get("YA_CLIENT_ID")
 YA_CLIENT_SECRET    = os.environ.get("YA_CLIENT_SECRET")
 YA_REFRESH_TOKEN    = os.environ.get("YA_REFRESH_TOKEN")
-
 
 YA_OAUTH_TOKEN_URL  = "https://oauth.yandex.ru/token"
 YA_INFO_TOKEN_URL   = "https://login.yandex.ru/info"
@@ -48,7 +46,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
     return CREDS
 
-
 async def login(update: Update, context: CallbackContext) -> str:
     """pokidovdv"""
 
@@ -64,7 +61,6 @@ async def login(update: Update, context: CallbackContext) -> str:
         await update.message.reply_text("Пользователь с таким логином не найден")
         return CREDS
 
-
 async def cancel(update: Update, context: CallbackContext) -> int:
     """Cancel the conversation."""
     await update.message.reply_text("The conversation has been canceled.")
@@ -74,7 +70,6 @@ async def cancel(update: Update, context: CallbackContext) -> int:
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
-
 
 async def tasks(
     update: Update,
@@ -129,7 +124,6 @@ async def tasks(
 
         await context.bot.send_message(chat_id=update.effective_chat.id, text=task_text)
         # TODO: добавить пагинацию (постраничный вывод) задач
-
 
 async def _fetch_tasks(access_token, login):
     payload = json.dumps(
@@ -193,12 +187,10 @@ def main() -> None:
     # Run the bot until the user presses Ctrl-C
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
-
-
 def check_yandex_access_token(yandex_info_response) -> str:
     """Recursive way to check if access token works.
 
-    Returns only when login was successful"""
+    Returns only when login was successful (+ refresh the token)"""
 
     if yandex_info_response.status_code == 200:
         print("Welcome, " + json.loads(yandex_info_response.text)['login'] + "!")
@@ -292,8 +284,6 @@ def get_yandex_access_token_refresh(refresh_token) -> dict:
     dotenv.set_key(DOTENV_PATH, "YA_REFRESH_TOKEN", os.environ["YA_REFRESH_TOKEN"])
 
     return access_token
-
-# TODO: добавить обновление OAuth-токена через refresh_token
 
 if __name__ == "__main__":
     main()
