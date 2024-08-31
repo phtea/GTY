@@ -1,6 +1,6 @@
-import requests
 import asyncio
-
+import aiohttp
+import logging
 # String manipulations
 import urllib.parse
 
@@ -43,25 +43,28 @@ async def get_access_token(username, password):
     body = urllib.parse.urlencode(body)
 
     headers = {
-    'Content-Type': 'application/x-www-form-urlencoded',
+        'Content-Type': 'application/x-www-form-urlencoded',
     }
 
-    response        = requests.request("POST", url, headers=headers, data=body)
-    response_json   = response.json()
-    access_token    = response_json['access_token']
-    refresh_token   = response_json['refresh_token']
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, headers=headers, data=body) as response:
+            response_json = await response.json()
+            access_token = response_json.get('access_token')
+            refresh_token = response_json.get('refresh_token')
 
-    global GAND_ACCESS_TOKEN
-    GAND_ACCESS_TOKEN                 = access_token
-    os.environ["GAND_ACCESS_TOKEN"]   = access_token
-    dotenv.set_key(DOTENV_PATH, "GAND_ACCESS_TOKEN", os.environ["GAND_ACCESS_TOKEN"])
+            # Update global tokens and environment variables
+            global GAND_ACCESS_TOKEN
+            GAND_ACCESS_TOKEN = access_token
+            os.environ["GAND_ACCESS_TOKEN"] = access_token
+            dotenv.set_key(DOTENV_PATH, "GAND_ACCESS_TOKEN", access_token)
 
-    global GAND_REFRESH_TOKEN
-    GAND_REFRESH_TOKEN                 = refresh_token
-    os.environ["GAND_REFRESH_TOKEN"]   = refresh_token
-    dotenv.set_key(DOTENV_PATH, "GAND_REFRESH_TOKEN", os.environ["GAND_REFRESH_TOKEN"])
+            global GAND_REFRESH_TOKEN
+            GAND_REFRESH_TOKEN = refresh_token
+            os.environ["GAND_REFRESH_TOKEN"] = refresh_token
+            dotenv.set_key(DOTENV_PATH, "GAND_REFRESH_TOKEN", refresh_token)
 
-    return response_json['access_token']
+            return access_token
+
 
 async def refresh_access_token(refresh_token):
     """Gets and updates access_token + refresh_token
@@ -77,30 +80,47 @@ async def refresh_access_token(refresh_token):
     body = urllib.parse.urlencode(body)
 
     headers = {
-    'Content-Type': 'application/x-www-form-urlencoded',
+        'Content-Type': 'application/x-www-form-urlencoded',
     }
 
-    response        = requests.request("POST", url, headers=headers, data=body)
-    response_json   = response.json()
-    access_token    = response_json['access_token']
-    refresh_token   = response_json['refresh_token']
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, headers=headers, data=body) as response:
+            response_json = await response.json()
+            access_token = response_json.get('access_token')
+            refresh_token = response_json.get('refresh_token')
 
-    global GAND_ACCESS_TOKEN
-    GAND_ACCESS_TOKEN                 = access_token
-    os.environ["GAND_ACCESS_TOKEN"]   = access_token
-    dotenv.set_key(DOTENV_PATH, "GAND_ACCESS_TOKEN", os.environ["GAND_ACCESS_TOKEN"])
+            # Update global tokens and environment variables
+            global GAND_ACCESS_TOKEN
+            GAND_ACCESS_TOKEN = access_token
+            os.environ["GAND_ACCESS_TOKEN"] = access_token
+            dotenv.set_key(DOTENV_PATH, "GAND_ACCESS_TOKEN", access_token)
 
-    global GAND_REFRESH_TOKEN
-    GAND_REFRESH_TOKEN                 = refresh_token
-    os.environ["GAND_REFRESH_TOKEN"]   = refresh_token
-    dotenv.set_key(DOTENV_PATH, "GAND_REFRESH_TOKEN", os.environ["GAND_REFRESH_TOKEN"])
-    print('all good')
+            global GAND_REFRESH_TOKEN
+            GAND_REFRESH_TOKEN = refresh_token
+            os.environ["GAND_REFRESH_TOKEN"] = refresh_token
+            dotenv.set_key(DOTENV_PATH, "GAND_REFRESH_TOKEN", refresh_token)
+            print('All good')
 
-    return response_json['access_token']
+            return access_token
 
-async def get_page_of_requests_by_filter(page_number):
+#  We pass session to functions which are going to be reused often 
+# (using a single session for multiple requests is more effective)
+async def get_task_by_id(session, request_id):
+    headers = {
+        "Content-type": "application/x-www-form-urlencoded",
+        "Authorization": f"Bearer {GAND_ACCESS_TOKEN}"
+    }
 
+    url = f"{HOST}/api/Requests/{request_id}"
 
+    async with session.get(url, headers=headers) as response:
+        if response.status in [200, 201]:
+            return await response.json()
+        else:
+            print(f"Failed to fetch task {request_id}: {response.status} - {await response.text()}")
+            return False
+
+async def get_page_of_tasks_by_filter(session, page_number):
     headers = {
         "Content-type": "application/json",
         "Authorization": f"Bearer {GAND_ACCESS_TOKEN}"
@@ -125,34 +145,55 @@ async def get_page_of_requests_by_filter(page_number):
     }
 
     body = json.dumps(body)
+
+    async with session.post(url, headers=headers, data=body) as response:
+        if response.status in [200, 201]:
+            logging.info(f"Page {page_number} fetched.")
+            return await response.json()
+        else:
+            logging.error(f"Failed to fetch page {page_number}: {response.status} - {await response.text()}")
+            return False
+
+async def get_all_tasks_by_filter():
+    all_requests = []
     
-    response = requests.request("POST", url, headers=headers, data=body)
+    async with aiohttp.ClientSession() as session:
+        # Fetch the first page to get the total count and number of pages
+        first_page_data = await get_page_of_tasks_by_filter(session, 1)
+        if not first_page_data:
+            return all_requests  # Return an empty list if the first page request fails
 
-    if response.status_code in [200, 201]:
-        return response.json()
-    else:
-        return False
+        total_requests = first_page_data['Total']
+        all_requests.extend(first_page_data['Requests'])
 
-async def get_request_by_id(request_id):
-    headers = {
-        "Content-type": "application/x-www-form-urlencoded",
-        "Authorization": f"Bearer {GAND_ACCESS_TOKEN}"
-    }
+        # Calculate the total number of pages
+        total_pages = (total_requests // 100) + 1
 
-    url = f"{HOST}/api/Requests/{request_id}"
+        # Create a list of tasks for all remaining pages
+        tasks = [
+            get_page_of_tasks_by_filter(session, page_number)
+            for page_number in range(2, total_pages + 1)
+        ]
 
+        # Run all tasks concurrently
+        responses = await asyncio.gather(*tasks)
 
-    response = requests.get(url, headers=headers)
-    if response.status_code in [200, 201]:
-        return response.json()
-    else:
-        return False
+        # Collect the requests from all the pages
+        for response in responses:
+            if response:
+                all_requests.extend(response['Requests'])
 
+    return all_requests
+
+import time # using for timing functions
 async def main():
     await get_access_token(GAND_LOGIN, GAND_PASSWORD)
     # response = await get_page_of_requests_by_filter(1)
-    response = await get_request_by_id(1002)
-    print(response)
+    # response = await get_request_by_id(1002)
+    start_time = time.time()
+    response = await get_all_tasks_by_filter()
+    print("--- %s seconds ---" % (time.time() - start_time))
+    # print(response)
 
 
 if __name__ == '__main__':
