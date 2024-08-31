@@ -1,112 +1,64 @@
-# t.me/SuccessYaTrackerBot
+import os
+import logging
+import asyncio
+from telebot.async_telebot import AsyncTeleBot
+from telebot.types import ReplyKeyboardRemove
+from telebot import custom_filters
 
-# Import our modules
 import modules.gandiva_api as gandiva_api
 import modules.yandex_api as yandex_api
 
-import json
-import logging
-import requests
-from telegram import Update
-from telegram.ext import (
-    Application,
-    CallbackContext,
-    CommandHandler,
-    ContextTypes,
-    ConversationHandler,
-    MessageHandler,
-    filters,
-)
-import asyncio
+# Load environment variables
+from dotenv import load_dotenv
 
-# Get sensitive data from dotenv
-import os
-import dotenv
-DOTENV_PATH = os.path.join(os.path.dirname(__file__), '.env')
-if os.path.exists(DOTENV_PATH):
-    dotenv.load_dotenv(DOTENV_PATH)
-TG_BOT_TOKEN        = os.environ.get("TG_BOT_TOKEN")
+load_dotenv()
+TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN")
 
-# TODO: обработать незаполненные значения в .env
+# Handle not enough data in .env
+if not TG_BOT_TOKEN:
+    raise ValueError("No TG_BOT_TOKEN found in environment variables. Please check your .env file.")
 
-# Conversation states
-CREDS = 1
+# Initialize the bot
+bot = AsyncTeleBot(TG_BOT_TOKEN)
 
-# Define a few command handlers. These usually take the two arguments update and context.
-# Conversation handlers
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(
-        "Пожалуйста, введите логин, чтобы проверить статус задач:"
-    )
-    return CREDS
+# Set up logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-async def login(update: Update, context: CallbackContext) -> str:
-    """pokidovdv"""
+# In-memory user data storage
+user_data = {}
 
-    login = update.message.text.strip()
+# Start command handler
+@bot.message_handler(commands=['start'])
+async def cmd_start(message):
+    await bot.send_message(message.chat.id, "Пожалуйста, введите логин, чтобы проверить статус задач:")
+    user_data[message.chat.id] = {}  # Initialize user data for the chat
 
-    if login:
-        context.user_data["login"] = login
-        await update.message.reply_html(f"Логин принят: {login}.")
+# Login handler
+@bot.message_handler(func=lambda message: message.chat.id in user_data and 'login' not in user_data[message.chat.id])
+async def process_login(message):
+    user_data[message.chat.id]['login'] = message.text.strip()
+    await bot.send_message(message.chat.id, f"Логин принят: {message.text.strip()}.")
 
-        return ConversationHandler.END
-
-    else:
-        await update.message.reply_text("Пользователь с таким логином не найден")
-        return CREDS
-
-async def cancel(update: Update, context: CallbackContext) -> int:
-    """Cancel the conversation."""
-    await update.message.reply_text("The conversation has been canceled.")
-    return ConversationHandler.END
-
-
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-)
-
-async def show_tasks(
-    update: Update,
-    context: CallbackContext,
-) -> None:
-    "Gathers user tasks using credentials from login"
-    logging.info("Executing fetch_tasks function")
-
-    if "login" not in context.user_data:
-        logging.info("User login not found in context.user_data")
-        await update.message.reply_text(
-            f"Tasks are currently unavailable. But I have your login: {context.user_data.get('login')}!"
-        )
+# Task fetching handler
+@bot.message_handler(commands=['tasks'])
+async def fetch_tasks(message):
+    if message.chat.id not in user_data or 'login' not in user_data[message.chat.id]:
+        await bot.send_message(message.chat.id, "Не удалось найти логин. Пожалуйста, начните с команды /start.")
         return
 
-    login = context.user_data["login"]
+    login = user_data[message.chat.id]['login']
     logging.info(f"Fetching tasks for user: {login}")
 
     tasks = await yandex_api.get_tasks_by_login(login)
 
-    # None
     if tasks is None:
-        msg = "Не удалось получить задачи от Yandex.Tracker."
-        logging.error(msg)
-        await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text=msg,
-        )
+        await bot.send_message(message.chat.id, "Не удалось получить задачи от Yandex.Tracker.")
         return
 
-    logging.info(f"Tasks successfully fetched for user ({login}): {tasks}")
-
-    # []
     if not tasks:
-        msg = "У вас нет ни одной активной задачи"
-        logging.info(msg)
-        await context.bot.send_message(
-            chat_id=update.effective_chat.id,
-            text=msg,
-        )
+        await bot.send_message(message.chat.id, "У вас нет ни одной активной задачи.")
         return
 
-    # [tasks...]
     for task in tasks:
         task_text = (
             f"Task Number: {task.get('key')}\n"
@@ -114,44 +66,20 @@ async def show_tasks(
             f"Description: {task.get('description')}\n"
             f"Status: {task.get('statusType', {}).get('value')}"
         )
+        await bot.send_message(message.chat.id, task_text)
 
-        await context.bot.send_message(chat_id=update.effective_chat.id, text=task_text)
-        # TODO: добавить пагинацию (постраничный вывод) задач
+# Cancel command handler
+@bot.message_handler(commands=['cancel'])
+async def cancel_handler(message):
+    if message.chat.id in user_data:
+        del user_data[message.chat.id]  # Remove user data
+    await bot.send_message(message.chat.id, "Диалог отменен.", reply_markup=ReplyKeyboardRemove())
 
-async def main() -> None:
-    """Start the bot."""
-
-    await yandex_api.check_yandex_access_token()
-
-    # Create the Application and pass it your bot's token.
-    application = (
-        Application.builder()
-        .token(TG_BOT_TOKEN)
-        .build()
-    )
-
-    # Create the ConversationHandler with states and handlers
-    conversation_handler = ConversationHandler(
-        entry_points=[CommandHandler("start", start)],
-        states={
-            CREDS: [MessageHandler(filters.TEXT & ~filters.COMMAND, login)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-    )
-
-    # Add the ConversationHandler to the application
-    application.add_handler(conversation_handler)
-
-    # Add fetch tasks handler to show current tasks details
-    async def tasks_caller(*args, **kwargs):
-        await show_tasks(*args, access_token=yandex_api.YA_ACCESS_TOKEN, **kwargs)
-
-    application.add_handler(CommandHandler("tasks", tasks_caller))
-
-    # Run the bot until the user presses Ctrl-C
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
-
-
+# Main function to start the bot
+async def main():
+    await yandex_api.check_access_token(yandex_api.YA_ACCESS_TOKEN)
+    logging.info("Bot started.")
+    await bot.polling()
 
 if __name__ == "__main__":
     asyncio.run(main())
