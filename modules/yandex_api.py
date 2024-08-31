@@ -20,6 +20,7 @@ YA_CLIENT_ID        = os.environ.get("YA_CLIENT_ID")
 YA_CLIENT_SECRET    = os.environ.get("YA_CLIENT_SECRET")
 YA_REFRESH_TOKEN    = os.environ.get("YA_REFRESH_TOKEN")
 
+# Handle not enough data in .env
 if not (YA_X_CLOUD_ORG_ID and YA_ACCESS_TOKEN and YA_CLIENT_ID and YA_CLIENT_SECRET):
     raise ValueError("""Not enough data found in environment variables. Please check your .env file:
                      YA_X_CLOUD_ORG_ID
