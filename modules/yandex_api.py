@@ -4,6 +4,8 @@ import logging
 import json
 import requests
 import asyncio
+import aiohttp
+from bs4 import BeautifulSoup
 
 # String manipulations
 import urllib.parse
@@ -40,29 +42,30 @@ logging.basicConfig(
 async def get_tasks_by_login(login):
     # TODO: add all filters in the future, should be universal
 
-    endpoint    = "/v2/issues/_search?expand=transitions"
-    url         = HOST + endpoint
+    endpoint = "/v2/issues/_search?expand=transitions"
+    url = HOST + endpoint
 
     body = {
         "filter": {
             "assignee": login
-            }
-    }
-    body = json.dumps(body)
-
-    headers= {
-            "Authorization": f"OAuth {YA_ACCESS_TOKEN}",
-            "Content-Type": "application/json",
-            "X-Cloud-Org-Id": YA_X_CLOUD_ORG_ID,
         }
-    
-    response = requests.post(url, headers=headers, data=body)
-    
-    if response.status_code != 200:
-        logging.error(f'[{response.status_code}] - {response.reason}')
-        return None
+    }
+    body_json = json.dumps(body)
 
-    return response.json()
+    headers = {
+        "Authorization": f"OAuth {YA_ACCESS_TOKEN}",
+        "Content-Type": "application/json",
+        "X-Cloud-Org-Id": YA_X_CLOUD_ORG_ID,
+    }
+
+    # Create a new ClientSession for the request
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, headers=headers, data=body_json) as response:
+            if response.status != 200:
+                logging.error(f'[{response.status}] - {response.reason}')
+                return None
+
+            return await response.json()  # Return the JSON response
 
 async def refresh_access_token(refresh_token=None) -> dict:
     """ Refresh access_token using refresh_token,
@@ -79,91 +82,97 @@ async def refresh_access_token(refresh_token=None) -> dict:
         "client_id": YA_CLIENT_ID,
         "client_secret": YA_CLIENT_SECRET
     }
-    # payload needs to be url encoded
+    
+    # URL encode the payload
     payload_url_encoded = urllib.parse.urlencode(payload)
+    
     headers = {
         'Content-Type': 'application/x-www-form-urlencoded',
     }
 
-    response = requests.request("POST", YA_OAUTH_TOKEN_URL, headers=headers, data=payload_url_encoded)
+    # Create a new ClientSession for the request
+    async with aiohttp.ClientSession() as session:
+        async with session.post(YA_OAUTH_TOKEN_URL, headers=headers, data=payload_url_encoded) as response:
+            if response.status != 200:
+                logging.error(f"Статус ошибки ответа запроса: {response.status}")
+                return None
 
-    if response.status_code != 200:
-        logging.error(f"Статус ошибки ответа запроса: {response.status_code}")
-        return None
+            logging.info(f"yandex refresh code response: {await response.text()}")
+            device_creds = await response.json()
 
+            access_token = device_creds['access_token']
+            refresh_token = device_creds['refresh_token']
 
-    logging.info(f"yandex refresh code response: {response.text}")
-    device_creds    = json.loads(response.text)
+            global YA_ACCESS_TOKEN
+            YA_ACCESS_TOKEN = access_token
+            os.environ["YA_ACCESS_TOKEN"] = access_token
+            dotenv.set_key(DOTENV_PATH, "YA_ACCESS_TOKEN", os.environ["YA_ACCESS_TOKEN"])
 
-    access_token    = device_creds['access_token']
-    refresh_token   = device_creds['refresh_token']
+            YA_REFRESH_TOKEN = refresh_token
+            os.environ["YA_REFRESH_TOKEN"] = refresh_token
+            dotenv.set_key(DOTENV_PATH, "YA_REFRESH_TOKEN", os.environ["YA_REFRESH_TOKEN"])
 
-    global YA_ACCESS_TOKEN
-    YA_ACCESS_TOKEN                 = access_token
-    os.environ["YA_ACCESS_TOKEN"]   = access_token
-    dotenv.set_key(DOTENV_PATH, "YA_ACCESS_TOKEN", os.environ["YA_ACCESS_TOKEN"])
-
-
-    YA_REFRESH_TOKEN                = refresh_token
-    os.environ["YA_REFRESH_TOKEN"]  = refresh_token
-    dotenv.set_key(DOTENV_PATH, "YA_REFRESH_TOKEN", os.environ["YA_REFRESH_TOKEN"])
-
-    return access_token
+            return access_token
 
 async def check_access_token(access_token) -> str:
     """Recursive way to check if access token works.
-
-    Returns only when login was successful (+ refresh the token)"""
-
-    response = await get_account_info(access_token)
-
-
-    if response.status_code == 200:
-        print("Welcome, " + json.loads(response.text)['login'] + "!")
-        return
-    else:
-        yandex_access_token = await refresh_access_token()
-        response = await get_account_info(yandex_access_token)
-        await check_access_token(access_token)
-
-async def get_account_info(access_token) -> requests.Response:
-    """Gets yandex account info by giving out access_token
-    Usually used to check if access_token is still relevant or not
-    """
-
-    response = requests.post(
-        YA_INFO_TOKEN_URL,
-        data={
-            "oauth_token": access_token,
-            "format": "json",
-        },
-    )
     
-    return response
+    Returns only when login was successful (+ refresh the token).
+    """
+    # Get account info using the provided access token
+    response = get_account_info(access_token)
+
+    # Check if the response is successful
+    if response.status_code == 200:
+        user_info = response.json()  # Parse the JSON response
+        print("Welcome, " + user_info['login'] + "!")
+        return
+
+    # If the response is not successful, refresh the access token
+    yandex_access_token = await refresh_access_token()
+
+    # Recheck the new access token
+    return await check_access_token(yandex_access_token)
+
+def get_account_info(access_token) -> requests.Response:
+    """Gets Yandex account info by providing the access_token.
+
+    Usually used to check if the access_token is still relevant or not.
+    """
+    # Prepare the request parameters
+    data = {
+        "oauth_token": access_token,
+        "format": "json",
+    }
+    
+    # Make the HTTP POST request
+    response = requests.post(YA_INFO_TOKEN_URL, data=data)
+
+    return response  # Return the response object
 
 async def get_access_token_captcha() -> str:
+    """Gets Yandex access token using manual captcha input."""
 
-    # Handling code retrieved manually from yandex.
-    # Sounds like bs but yet required.
+    # Handling code retrieved manually from Yandex
     yandex_id_metadata = {}
-    while not yandex_id_metadata.get("access_token"):
-        yandex_captcha_code = input(f"Code (get from https://oauth.yandex.ru/authorize?response_type=code&client_id={YA_CLIENT_ID}): ")
-        yandex_captcha_response = requests.post(
-            YA_OAUTH_TOKEN_URL,
-            data={
+
+    async with aiohttp.ClientSession() as session:
+        while not yandex_id_metadata.get("access_token"):
+            yandex_captcha_code = input(f"Code (get from https://oauth.yandex.ru/authorize?response_type=code&client_id={YA_CLIENT_ID}): ")
+            async with session.post(YA_OAUTH_TOKEN_URL, data={
                 "grant_type": "authorization_code",
                 "code": yandex_captcha_code,
                 "client_id": YA_CLIENT_ID,
                 "client_secret": YA_CLIENT_SECRET,
-            },
-        )
+            }) as yandex_captcha_response:
+                
+                logging.info(f"Yandex captcha code: {yandex_captcha_response.status}")
+                response_text = await yandex_captcha_response.text()
+                logging.info(f"Yandex captcha response: {response_text}")
 
-        logging.info(f"yandex captcha code: {yandex_captcha_response.status_code}")
-        logging.info(f"yandex captcha response: {yandex_captcha_response.text}")
+                yandex_id_metadata = json.loads(response_text)
 
-        yandex_id_metadata = json.loads(yandex_captcha_response.text)
-
-    yandex_access_token = yandex_id_metadata["access_token"]
+    yandex_access_token = yandex_id_metadata.get("access_token")
     return yandex_access_token
 
 async def add_task(
@@ -172,8 +181,12 @@ async def add_task(
     description="Без описания",
     queue="TESTQUEUE",
     assignee_yandex_login="",
-    task_type=""
+    task_type="",
+    session=None  # Accept session as a parameter
 ):
+    if session is None:
+        raise ValueError("Session must be provided.")
+
     # Convert the task ID to a string
     task_id_gandiva = str(task_id_gandiva)
 
@@ -185,7 +198,7 @@ async def add_task(
         "summary": task_summary,
         "description": description,
         "queue": queue,
-        "66c9888e114f9256cfd4fea2--TQ_Initiator": initiator_name,
+        "66d379ee99b2de14092e0185--Initiator": initiator_name,
         "unique": task_id_gandiva
     }
 
@@ -197,31 +210,37 @@ async def add_task(
         body["type"] = task_type
 
     # Convert the body to a JSON string
-    body = json.dumps(body)
+    body_json = json.dumps(body)
 
     # Set up the headers
     headers = {
         "Content-type": "application/json",
-        "X-Cloud-Org-Id": "bpflsbold6n4eeu80057",  # Replace with actual ID if different
+        "X-Cloud-Org-Id": YA_X_CLOUD_ORG_ID,
         "Authorization": f"OAuth {YA_ACCESS_TOKEN}"
     }
 
     # Construct the URL
     url = f"{HOST}/v2/issues"
 
-    # Make the HTTP POST request
-    response = requests.post(url, data=body, headers=headers)
+    try:
+        # Make the HTTP POST request using the session
+        async with session.post(url, data=body_json, headers=headers) as response:
+            sc = response.status
+            response_text = await response.text()  # Get the response text for logging
 
-    sc = response.status_code
-
-    # Check if the response is successful
-    if sc in [200, 201]:
-        return response.json()  # Return the json
-    elif sc == 409:
-        logging.info(f"Task {task_id_gandiva} already exists")
-        return sc # we can handle this status code later
-    else:
-        return False
+            # Check if the response is successful
+            if sc in [200, 201]:
+                logging.info(f"Task {task_id_gandiva} successfully added!")
+                return await response.json()  # Return the json
+            elif sc == 409:
+                logging.info(f"Task {task_id_gandiva} already exists")
+                return sc  # we can handle this status code later
+            else:
+                logging.error(f"Failed to add task {task_id_gandiva}: {sc} - {response_text}")
+                return False  # Return False for any other error
+    except Exception as e:
+        logging.error(f"Exception occurred while adding task {task_id_gandiva}: {str(e)}")
+        return False  # Return False if an exception occurs
 
 async def get_tasks(queue="TESTQUEUE", page_number=1, per_page=5000):
     # Determine the sorting order and page size
@@ -242,7 +261,7 @@ async def get_tasks(queue="TESTQUEUE", page_number=1, per_page=5000):
     }
 
     # Convert the body to a JSON string
-    body = json.dumps(body)
+    body_json = json.dumps(body)
 
     # Set up the headers
     headers = {
@@ -254,23 +273,72 @@ async def get_tasks(queue="TESTQUEUE", page_number=1, per_page=5000):
     # Construct the URL
     url = f"{HOST}/v2/issues/_search?expand=transitions&perPage={per_page}{page_parameter}"
 
-    # Make the HTTP POST request
-    response = requests.post(url, data=body, headers=headers)
+    # Use aiohttp to make the HTTP POST request
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, data=body_json, headers=headers) as response:
+            # Check if the response is successful
+            if response.status in [200, 201]:
+                return await response.json()  # Return the JSON response
+            else:
+                logging.error(f"Failed to get tasks: {response.status} - {await response.text()}")
+                return False
+    
+async def get_all_yandex_tasks(queue="TESTQUEUE"):
+    # Initialize an empty list to store all tasks
+    all_yandex_tasks = []
+    page_number = 1
 
-    # Check if the response is successful
-    if response.status_code in [200, 201]:
-        return response.json()
-    else:
-        return False
+    # Loop to fetch tasks page by page until no more tasks are returned
+    while True:
+        # Fetch tasks for the current page
+        yandex_tasks = await get_tasks(queue=queue, page_number=page_number)
+
+        # Check if the current page has no tasks (i.e., the list is empty or None)
+        if not yandex_tasks or len(yandex_tasks) == 0:
+            break
+
+        # Append the tasks to the all_yandex_tasks list
+        all_yandex_tasks.extend(yandex_tasks)
+
+        # Move to the next page
+        page_number += 1
+
+    # Return the full list of tasks
+    return all_yandex_tasks
+
+async def add_tasks(tasks_gandiva, queue="TESTQUEUE"):
+    """
+    Adds tasks from Gandiva to Yandex Tracker if they do not already exist in Yandex Tracker.
+
+    :param tasks_gandiva: List of tasks from Gandiva
+    :param queue: The queue to which tasks should be added
+    """
+    # Create a new aiohttp session
+    async with aiohttp.ClientSession() as session:
+        for task in tasks_gandiva:
+            task_id = str(task['Id'])
+
+            # Extract and format task details
+            initiator_name = f"{task['Initiator']['FirstName']} {task['Initiator']['LastName']}"
+            description_html = task['Description']
+            description = extract_text_from_html(description_html)  # Assuming a helper function to extract text from HTML
+            assignee_login_yandex = ""
+            task_type = ""
+
+            # Add the task to Yandex Tracker
+            await add_task(task_id, initiator_name, description, queue, assignee_login_yandex, task_type, session)
+
+def extract_text_from_html(html):
+    soup = BeautifulSoup(html, "html.parser")
+    return soup.get_text()
 
 # import time # using for timing functions
-
 async def main():
     
     # await refresh_access_token(YA_REFRESH_TOKEN)
     # start_time = time.time()
-    res = await get_tasks_by_login("phtea")
-    # res = await get_tasks()
+    # res = await get_tasks_by_login("phtea")
+    res = await get_all_yandex_tasks()
     print(res)
     # print("--- %s seconds ---" % (time.time() - start_time))
     pass
