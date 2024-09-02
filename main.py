@@ -49,7 +49,7 @@ async def fetch_tasks(message):
     login = user_data[message.chat.id]['login']
     logging.info(f"Fetching tasks for user: {login}")
 
-    tasks = await yandex_api.get_tasks_by_login(login)
+    tasks = await yandex_api.get_page_of_tasks(login=login)
 
     if tasks is None:
         await bot.send_message(message.chat.id, "Не удалось получить задачи от Yandex.Tracker.")

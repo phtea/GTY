@@ -39,33 +39,25 @@ logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
-async def get_tasks_by_login(login):
-    # TODO: add all filters in the future, should be universal
+def extract_text_from_html(html):
+    soup = BeautifulSoup(html, "html.parser")
+    return soup.get_text()
 
-    endpoint = "/v2/issues/_search?expand=transitions"
-    url = HOST + endpoint
+def get_account_info(access_token) -> requests.Response:
+    """Gets Yandex account info by providing the access_token.
 
-    body = {
-        "filter": {
-            "assignee": login
-        }
+    Usually used to check if the access_token is still relevant or not.
+    """
+    # Prepare the request parameters
+    data = {
+        "oauth_token": access_token,
+        "format": "json",
     }
-    body_json = json.dumps(body)
+    
+    # Make the HTTP POST request
+    response = requests.post(YA_INFO_TOKEN_URL, data=data)
 
-    headers = {
-        "Authorization": f"OAuth {YA_ACCESS_TOKEN}",
-        "Content-Type": "application/json",
-        "X-Cloud-Org-Id": YA_X_CLOUD_ORG_ID,
-    }
-
-    # Create a new ClientSession for the request
-    async with aiohttp.ClientSession() as session:
-        async with session.post(url, headers=headers, data=body_json) as response:
-            if response.status != 200:
-                logging.error(f'[{response.status}] - {response.reason}')
-                return None
-
-            return await response.json()  # Return the JSON response
+    return response  # Return the response object
 
 async def refresh_access_token(refresh_token=None) -> dict:
     """ Refresh access_token using refresh_token,
@@ -134,24 +126,26 @@ async def check_access_token(access_token) -> str:
     # Recheck the new access token
     return await check_access_token(yandex_access_token)
 
-def get_account_info(access_token) -> requests.Response:
-    """Gets Yandex account info by providing the access_token.
-
-    Usually used to check if the access_token is still relevant or not.
-    """
-    # Prepare the request parameters
-    data = {
-        "oauth_token": access_token,
-        "format": "json",
-    }
-    
-    # Make the HTTP POST request
-    response = requests.post(YA_INFO_TOKEN_URL, data=data)
-
-    return response  # Return the response object
-
 async def get_access_token_captcha() -> str:
-    """Gets Yandex access token using manual captcha input."""
+    """
+    Asynchronously retrieves the Yandex access token using manual captcha input.
+
+    This function prompts the user to enter a captcha code obtained from the Yandex OAuth authorization 
+    endpoint. It sends a POST request to the Yandex OAuth token URL with the provided captcha code 
+    and other necessary credentials to retrieve an access token.
+
+    Returns:
+    - str: The Yandex access token if successfully retrieved.
+
+    Raises:
+    - ValueError: If the captcha code is invalid and the access token cannot be obtained.
+
+    Notes:
+    - The user must manually obtain the captcha code by visiting the Yandex authorization URL:
+      `https://oauth.yandex.ru/authorize?response_type=code&client_id={YA_CLIENT_ID}`.
+    - The function will keep prompting for the captcha code until a valid access token is returned.
+    - Logging is used to record the status of the HTTP response and the response text for debugging purposes.
+    """
 
     # Handling code retrieved manually from Yandex
     yandex_id_metadata = {}
@@ -175,15 +169,203 @@ async def get_access_token_captcha() -> str:
     yandex_access_token = yandex_id_metadata.get("access_token")
     return yandex_access_token
 
-async def add_task(
-    task_id_gandiva,
-    initiator_name,
-    description="Без описания",
-    queue="TESTQUEUE",
-    assignee_yandex_login="",
-    task_type="",
-    session=None  # Accept session as a parameter
-):
+async def get_page_of_tasks(queue: str = None,
+                    keys: str | list[str] = None,
+                    filter: dict = None,
+                    query: str = None,
+                    order: str = None,
+                    expand: str = None,
+                    login: str = None,
+                    page_number: int = 1,
+                    per_page: int = 5000):
+    """
+    Asynchronously retrieves tasks from the Yandex Tracker API based on specified filters and parameters.
+
+    The function supports various filtering options, allowing the user to retrieve tasks by queue,
+    specific task keys, filter criteria, or custom query language. Additionally, it allows for
+    sorting and pagination of the results.
+
+    Parameters:
+    - queue (str, optional): The name of the queue to filter tasks by. This takes precedence over other filters.
+    - keys (str | list[str], optional): A single task key or a list of task keys to retrieve specific tasks.
+    - filter (dict, optional): A dictionary of additional filter criteria. This can include any field in the task.
+    - query (str, optional): A custom query string using Yandex Tracker's query language for more complex filtering.
+    - order (str, optional): The sorting order for the results, specified in the format '[+/-]<field_key>'.
+                              Use '+' for ascending and '-' for descending order.
+    - expand (str, optional): A comma-separated string of fields to include in the response (e.g., 'transitions,attachments').
+    - login (str, optional): The assignee's login name to filter tasks by assignee.
+    - page_number (int, optional): The page number for paginated results. Defaults to 1.
+    - per_page (int, optional): The number of tasks per page. Defaults to 5000, but can be adjusted as needed.
+
+    Returns:
+    - dict: A dictionary containing the retrieved tasks in JSON format if the request is successful.
+    - bool: Returns False if the request fails, logging the error message.
+
+    Note:
+    The priority of parameters is as follows:
+    1. `queue`
+    2. `keys`
+    3. `filter`
+    4. `query`
+
+    Only one of these parameters can be used at a time. If both `queue` and `login` are provided,
+    tasks will be filtered by both criteria. If `filter` is provided, it will be merged with the
+    `assignee` if specified.
+
+    Example Usage:
+    >>> tasks = await get_tasks(queue="TREK", login="user_login", order="+status")
+    >>> tasks = await get_tasks(keys=["TASK-1", "TASK-2"], expand="attachments")
+    >>> tasks = await get_tasks(login="user_login")  # This will now work
+    """
+    # Initialize the request body
+    body = {}
+
+    # Respect the priority of parameters: queue > keys > filter > query
+    if queue:
+        body["filter"] = {"queue": queue}
+        if login:
+            body["filter"]["assignee"] = login
+        if filter:
+            body["filter"].update(filter)
+    elif keys:
+        body["keys"] = keys
+    elif filter:
+        body["filter"] = filter
+        if login:
+            body["filter"]["assignee"] = login
+    elif login:
+        body["filter"] = {"assignee": login}  # Allow filtering by login alone
+    elif query:
+        body["query"] = query
+
+    # Include sorting order if filters are used
+    if "filter" in body and order:
+        body["order"] = order
+
+    # Convert the body to a JSON string
+    body_json = json.dumps(body)
+
+    # Set up the headers
+    headers = {
+        "Content-type": "application/json",
+        "X-Cloud-Org-Id": YA_X_CLOUD_ORG_ID,
+        "Authorization": f"OAuth {YA_ACCESS_TOKEN}"
+    }
+
+    # Construct the URL with the expand and perPage parameters
+    url = f"{HOST}/v2/issues/_search?perPage={per_page}"
+    if page_number > 1:
+        url += f"&page={page_number}"
+    if expand:
+        url += f"&expand={expand}"
+
+    # Use aiohttp to make the HTTP POST request
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, data=body_json, headers=headers) as response:
+            # Check if the response is successful
+            if response.status in [200, 201]:
+                return await response.json()  # Return the JSON response
+            else:
+                logging.error(f"Failed to get tasks: {response.status} - {await response.text()}")
+                return False
+    
+async def get_all_tasks(queue: str = "TEA",
+                                keys: str | list[str] = None,
+                                filter: dict = None,
+                                query: str = None,
+                                order: str = None,
+                                expand: str = None,
+                                login: str = None,
+                                per_page: int = 5000):
+    """
+    Asynchronously retrieves all tasks from the Yandex Tracker API based on specified filters and parameters.
+    
+    This function will paginate through the results, collecting all tasks until there are no more tasks to retrieve.
+
+    Parameters:
+    - queue (str, optional): The name of the queue to filter tasks by. Defaults to "TEA".
+    - keys (str | list[str], optional): A single task key or a list of task keys to retrieve specific tasks.
+    - filter (dict, optional): A dictionary of additional filter criteria. This can include any field in the task.
+    - query (str, optional): A custom query string using Yandex Tracker's query language for more complex filtering.
+    - order (str, optional): The sorting order for the results, specified in the format '[+/-]<field_key>'.
+    - expand (str, optional): A comma-separated string of fields to include in the response (e.g., 'transitions,attachments').
+    - login (str, optional): The assignee's login name to filter tasks by assignee.
+    - per_page (int, optional): The number of tasks per page. Defaults to 5000.
+
+    Returns:
+    - list or bool: A list containing all retrieved tasks in JSON format, or False if no tasks are found.
+    """
+    # Initialize an empty list to store all tasks
+    all_yandex_tasks = []
+    page_number = 1
+
+    # Loop to fetch tasks page by page until no more tasks are returned
+    while True:
+        # Fetch tasks for the current page with all provided arguments
+        yandex_tasks = await get_page_of_tasks(
+            queue=queue,
+            keys=keys,
+            filter=filter,
+            query=query,
+            order=order,
+            expand=expand,
+            login=login,
+            page_number=page_number,
+            per_page=per_page
+        )
+
+        # Check if the current page has no tasks (i.e., the list is empty or None)
+        if not yandex_tasks or len(yandex_tasks) == 0:
+            break
+
+        # Append the tasks to the all_yandex_tasks list
+        all_yandex_tasks.extend(yandex_tasks)
+
+        # Move to the next page
+        page_number += 1
+
+    # Return False if no tasks were found; otherwise, return the full list of tasks
+    return all_yandex_tasks if all_yandex_tasks else False
+
+async def add_task(task_id_gandiva,
+                   initiator_name,
+                   description="Без описания",
+                   queue="TEA",
+                   assignee_yandex_login="",
+                   task_type="",
+                   session=None):
+    """
+    Asynchronously adds a new task to the Yandex Tracker.
+
+    This function constructs a task with the provided details and sends a POST request to 
+    the Yandex Tracker API to create the task. It supports various parameters for task creation, 
+    including the ability to specify an assignee and task type.
+
+    Parameters:
+    - task_id_gandiva (str or int): The unique identifier for the task in Gandiva. 
+                                     This will be converted to a string.
+    - initiator_name (str): The name of the user or entity initiating the task.
+    - description (str, optional): A brief description of the task. Defaults to "Без описания" (No description).
+    - queue (str, optional): The queue to which the task should be added. Defaults to "TEA".
+    - assignee_yandex_login (str, optional): The Yandex login of the user to whom the task will be assigned. 
+                                               Defaults to an empty string (no assignee).
+    - task_type (str, optional): The type of the task being created. Defaults to an empty string.
+    - session (aiohttp.ClientSession, optional): An optional aiohttp session object to use for the request. 
+                                                 If None, an exception will be raised.
+
+    Returns:
+    - dict or bool: Returns the JSON response from the API if the task is successfully added, 
+                    returns the status code (409) if the task already exists, 
+                    and returns False for any other errors or exceptions.
+
+    Raises:
+    - ValueError: If session is None.
+
+    Notes:
+    - The task summary is generated from the task ID and the first 50 characters of the description.
+    - If a task with the same ID already exists, a status code of 409 will be returned.
+    - Proper error handling is implemented to catch exceptions during the request.
+    """
     if session is None:
         raise ValueError("Session must be provided.")
 
@@ -242,71 +424,7 @@ async def add_task(
         logging.error(f"Exception occurred while adding task {task_id_gandiva}: {str(e)}")
         return False  # Return False if an exception occurs
 
-async def get_tasks(queue="TESTQUEUE", page_number=1, per_page=5000):
-    # Determine the sorting order and page size
-    sorting_order = "+key"
-
-    # Construct page parameter
-    if page_number == 1:
-        page_parameter = ""
-    else:
-        page_parameter = f"&page={page_number}"
-
-    # Prepare the request body with filter and order
-    body = {
-        "filter": {
-            "queue": queue
-        },
-        "order": sorting_order
-    }
-
-    # Convert the body to a JSON string
-    body_json = json.dumps(body)
-
-    # Set up the headers
-    headers = {
-        "Content-type": "application/json",
-        "X-Cloud-Org-Id": YA_X_CLOUD_ORG_ID,
-        "Authorization": f"OAuth {YA_ACCESS_TOKEN}"
-    }
-
-    # Construct the URL
-    url = f"{HOST}/v2/issues/_search?expand=transitions&perPage={per_page}{page_parameter}"
-
-    # Use aiohttp to make the HTTP POST request
-    async with aiohttp.ClientSession() as session:
-        async with session.post(url, data=body_json, headers=headers) as response:
-            # Check if the response is successful
-            if response.status in [200, 201]:
-                return await response.json()  # Return the JSON response
-            else:
-                logging.error(f"Failed to get tasks: {response.status} - {await response.text()}")
-                return False
-    
-async def get_all_yandex_tasks(queue="TESTQUEUE"):
-    # Initialize an empty list to store all tasks
-    all_yandex_tasks = []
-    page_number = 1
-
-    # Loop to fetch tasks page by page until no more tasks are returned
-    while True:
-        # Fetch tasks for the current page
-        yandex_tasks = await get_tasks(queue=queue, page_number=page_number)
-
-        # Check if the current page has no tasks (i.e., the list is empty or None)
-        if not yandex_tasks or len(yandex_tasks) == 0:
-            break
-
-        # Append the tasks to the all_yandex_tasks list
-        all_yandex_tasks.extend(yandex_tasks)
-
-        # Move to the next page
-        page_number += 1
-
-    # Return the full list of tasks
-    return all_yandex_tasks
-
-async def add_tasks(tasks_gandiva, queue="TESTQUEUE"):
+async def add_tasks(tasks_gandiva, queue="TEA"):
     """
     Adds tasks from Gandiva to Yandex Tracker if they do not already exist in Yandex Tracker.
 
@@ -328,19 +446,118 @@ async def add_tasks(tasks_gandiva, queue="TESTQUEUE"):
             # Add the task to Yandex Tracker
             await add_task(task_id, initiator_name, description, queue, assignee_login_yandex, task_type, session)
 
-def extract_text_from_html(html):
-    soup = BeautifulSoup(html, "html.parser")
-    return soup.get_text()
+async def edit_task(
+    task_id_yandex,
+    summary=None,
+    description=None,
+    assignee_yandex_login=None,
+    task_type=None,
+    priority=None,
+    parent=None,
+    sprint=None,
+    followers=None,
+    session=None  # Accept session as a parameter
+):
+    """
+    Asynchronously updates an existing task in the Yandex Tracker.
 
-# import time # using for timing functions
+    This function constructs a PATCH request to update fields of an existing task in the Yandex Tracker API.
+    It allows updating the task's summary, description, assignee, type, priority, and other fields.
+
+    Parameters:
+    - task_id_gandiva (str or int): The unique identifier for the task in Gandiva. 
+                                     This will be converted to a string.
+    - summary (str, optional): The new title of the task.
+    - description (str, optional): The new description of the task.
+    - assignee_yandex_login (str, optional): The Yandex login of the user to whom the task will be assigned.
+    - task_type (dict, optional): The new type of the task. Provide a dictionary with `id` or `key`.
+    - priority (dict, optional): The new priority of the task. Provide a dictionary with `id` or `key`.
+    - parent (dict, optional): The parent task. Provide a dictionary with `id` or `key`.
+    - sprint (list[dict], optional): A list of sprints to add the task to. Provide dictionaries with `id`.
+    - followers (list[str], optional): A list of Yandex logins to add as followers.
+    - session (aiohttp.ClientSession, optional): An optional aiohttp session object to use for the request. 
+                                                 If None, an exception will be raised.
+
+    Returns:
+    - dict or bool: Returns the JSON response from the API if the task is successfully updated, 
+                    and returns False for any errors or exceptions.
+
+    Raises:
+    - ValueError: If session is None.
+
+    Notes:
+    - Only the fields provided as parameters will be updated. If a field is not provided, it remains unchanged.
+    - Proper error handling is implemented to catch exceptions during the request.
+    
+    Example Usage:
+    >>> await update_task(task_id_gandiva="TEST-1", summary="New Title", description="Updated description")
+    """
+    if session is None:
+        raise ValueError("Session must be provided.")
+
+    # Convert the task ID to a string
+    task_id_yandex = str(task_id_yandex)
+
+    # Prepare the request body
+    body = {}
+
+    if summary:
+        body["summary"] = summary
+    if description:
+        body["description"] = description
+    if assignee_yandex_login:
+        body["assignee"] = assignee_yandex_login
+    if task_type:
+        body["type"] = task_type
+    if priority:
+        body["priority"] = priority
+    if parent:
+        body["parent"] = parent
+    if sprint:
+        body["sprint"] = sprint
+    if followers:
+        body["followers"] = {"add": followers}
+
+    # Convert the body to a JSON string
+    body_json = json.dumps(body)
+
+    # Set up the headers
+    headers = {
+        "Content-type": "application/json",
+        "X-Cloud-Org-Id": YA_X_CLOUD_ORG_ID,
+        "Authorization": f"OAuth {YA_ACCESS_TOKEN}"
+    }
+
+    # Construct the URL for updating the task
+    url = f"{HOST}/v2/issues/{task_id_yandex}"
+
+    try:
+        # Make the HTTP PATCH request using the session
+        async with session.patch(url, data=body_json, headers=headers) as response:
+            sc = response.status
+            response_text = await response.text()  # Get the response text for logging
+
+            # Check if the response is successful
+            if sc in [200, 201]:
+                logging.info(f"Task {task_id_yandex} successfully updated!")
+                return await response.json()  # Return the JSON response
+            else:
+                logging.error(f"Failed to update task {task_id_yandex}: {sc} - {response_text}")
+                return False  # Return False for any other error
+    except Exception as e:
+        logging.error(f"Exception occurred while updating task {task_id_yandex}: {str(e)}")
+        return False  # Return False if an exception occurs
+
+
+import time # using for timing functions
 async def main():
     
     # await refresh_access_token(YA_REFRESH_TOKEN)
-    # start_time = time.time()
-    # res = await get_tasks_by_login("phtea")
-    res = await get_all_yandex_tasks()
+    start_time = time.time()
+    async with aiohttp.ClientSession() as session:
+        res = await edit_task(task_id_yandex="tea-1", summary="new summary", description="new desc", followers="phtea", session=session)
     print(res)
-    # print("--- %s seconds ---" % (time.time() - start_time))
+    print("--- %s seconds ---" % (time.time() - start_time))
     pass
 
 if __name__ == '__main__':
