@@ -80,8 +80,8 @@ async def main():
     # await yandex_api.check_access_token(yandex_api.YA_ACCESS_TOKEN)
     # await gandiva_api.get_access_token(gandiva_api.GAND_LOGIN, gandiva_api.GAND_PASSWORD)
 
-    # tasks = await gandiva_api.get_all_tasks_by_filter()
-    # await yandex_api.add_tasks(tasks, "TEA")
+    tasks = await gandiva_api.get_all_tasks_by_filter()
+    await yandex_api.add_tasks(tasks, "TEA")
 
     logging.info("Bot started.")
     await bot.polling()

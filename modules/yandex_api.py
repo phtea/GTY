@@ -446,18 +446,16 @@ async def add_tasks(tasks_gandiva, queue="TEA"):
             # Add the task to Yandex Tracker
             await add_task(task_id, initiator_name, description, queue, assignee_login_yandex, task_type, session)
 
-async def edit_task(
-    task_id_yandex,
-    summary=None,
-    description=None,
-    assignee_yandex_login=None,
-    task_type=None,
-    priority=None,
-    parent=None,
-    sprint=None,
-    followers=None,
-    session=None  # Accept session as a parameter
-):
+async def edit_task(task_id_yandex,
+                    summary=None,
+                    description=None,
+                    assignee_yandex_login=None,
+                    task_type=None,
+                    priority=None,
+                    parent=None,
+                    sprint=None,
+                    followers=None,
+                    session=None):
     """
     Asynchronously updates an existing task in the Yandex Tracker.
 
@@ -554,8 +552,9 @@ async def main():
     
     # await refresh_access_token(YA_REFRESH_TOKEN)
     start_time = time.time()
-    async with aiohttp.ClientSession() as session:
-        res = await edit_task(task_id_yandex="tea-1", summary="new summary", description="new desc", followers="phtea", session=session)
+    # async with aiohttp.ClientSession() as session:
+    #     res = await edit_task(task_id_yandex="tea-1", summary="new summary", description="new desc", followers="phtea", session=session)
+    res = await get_all_tasks(expand="transitions", queue="tea")
     print(res)
     print("--- %s seconds ---" % (time.time() - start_time))
     pass
