@@ -5,7 +5,7 @@
 
 # SuccessYaTrackerTGBot
 
-SuccessYaTrackerTGBot is a Telegram bot designed to interact with Yandex.Tracker, allowing users to fetch and display tasks assigned to them. The bot is built using Python, the Telegram API, and the Yandex OAuth API for authentication and task management.
+SuccessYaTrackerTGBot is a Telegram bot designed to interact with Yandex.Tracker, allowing users to fetch and display tasks assigned to them. The bot is built using Python, the Telegram API, Gandiva API, and the Yandex OAuth API for authentication and task management.
 
 ## Features
 
@@ -18,6 +18,7 @@ SuccessYaTrackerTGBot is a Telegram bot designed to interact with Yandex.Tracker
 - Python 3.7+
 - Telegram bot token
 - Yandex OAuth credentials
+- Gandiva credentials
 
 ## Installation
 
