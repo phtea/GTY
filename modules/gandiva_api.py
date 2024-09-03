@@ -7,6 +7,7 @@ import urllib.parse
 import os
 import dotenv
 import json
+import csv
 
 DOTENV_PATH = os.path.join(os.path.dirname(__file__), os.pardir)
 DOTENV_PATH = os.path.join(DOTENV_PATH, '.env')
@@ -120,6 +121,30 @@ async def get_task_by_id(session, request_id):
             print(f"Failed to fetch task {request_id}: {response.status} - {await response.text()}")
             return False
 
+async def get_department_by_user_id(session, user_id):
+    headers = {
+        "Content-type": "application/x-www-form-urlencoded",
+        "Authorization": f"Bearer {GAND_ACCESS_TOKEN}"
+    }
+    endpoint = f"api/Users/{user_id}"
+    url = f"{HOST}/{endpoint}"
+
+    async with session.get(url, headers=headers) as response:
+        if response.status == 200:
+            user_data = await response.json()
+            logging.info(f"Succesfully gathered user {user_id}")
+            return user_data.get("Department")
+        else:
+            logging.error(f"Error for user {user_id} <{response.status}>")
+            return None
+        
+async def get_departments_for_users(user_ids):
+    async with aiohttp.ClientSession() as session:
+        tasks = [get_department_by_user_id(session, user_id) for user_id in user_ids]
+        departments = await asyncio.gather(*tasks)
+    unique_departments = list(set(departments))
+    return unique_departments     
+
 async def get_page_of_tasks_by_filter(session, page_number):
     headers = {
         "Content-type": "application/json",
@@ -127,12 +152,14 @@ async def get_page_of_tasks_by_filter(session, page_number):
     }
     endpoint = "/api/Requests/Filter"
     url = HOST + endpoint
-    filter_departments = [2]
-    filter_categories = [32]
+    filter_departments  = [2]
+    filter_categories   = [32]
+    filter_statuses     = [4, 5, 6, 8, 10, 11, 12, 13]
 
     filter_data = {
         "Departments": filter_departments,
-        "Categories": filter_categories
+        "Categories": filter_categories,
+        "Statuses": filter_statuses
     }
 
     body = {
@@ -168,6 +195,7 @@ async def get_all_tasks_by_filter():
 
         # Calculate the total number of pages
         total_pages = (total_requests // 100) + 1
+        logging.info(f"Found {total_pages} pages of tasks in Gandiva.")
 
         # Create a list of tasks for all remaining pages
         tasks = [
@@ -185,15 +213,49 @@ async def get_all_tasks_by_filter():
 
     return all_requests
 
+def get_all_unique_initiators(data):
+    # Extract unique Initiator IDs
+    unique_initiator_ids = {request['Initiator']['Id'] for request in data}
+
+    # Convert to a list (if needed)
+    unique_initiator_ids_list = list(unique_initiator_ids)
+
+    # Output the unique IDs
+    return unique_initiator_ids_list
+
 import time # using for timing functions
 async def main():
-    await get_access_token(GAND_LOGIN, GAND_PASSWORD)
     # response = await get_page_of_requests_by_filter(1)
     # response = await get_request_by_id(1002)
+    
+
+
+    # async with aiohttp.ClientSession() as session:
+        # response = await get_page_of_tasks_by_filter(page_number=1, session=session)
+        # res = await get_department_by_user_id(session=session, user_id=138)
+
+
+    await get_access_token(GAND_LOGIN, GAND_PASSWORD)
     start_time = time.time()
-    response = await get_all_tasks_by_filter()
+
+    response_tasks = await get_all_tasks_by_filter()
+    
+    user_ids = get_all_unique_initiators(response_tasks)
+
+    dep_ids = await get_departments_for_users(user_ids)
+
+    print(dep_ids)
+
+    save_list_to_csv(dep_ids, 'department_names.csv')
     print("--- %s seconds ---" % (time.time() - start_time))
-    # print(response)
+
+
+def save_list_to_csv(data_list, filename):
+    with open(filename, mode='w', newline='') as file:
+        writer = csv.writer(file)
+        for item in data_list:
+            writer.writerow([item])  # Write each item in a new row
+
 
 
 if __name__ == '__main__':
