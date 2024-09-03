@@ -152,12 +152,14 @@ async def get_page_of_tasks_by_filter(session, page_number):
     }
     endpoint = "/api/Requests/Filter"
     url = HOST + endpoint
-    filter_departments = [2]
-    filter_categories = [32]
+    filter_departments  = [2]
+    filter_categories   = [32]
+    filter_statuses     = [4, 5, 6, 8, 10, 11, 12, 13]
 
     filter_data = {
         "Departments": filter_departments,
-        "Categories": filter_categories
+        "Categories": filter_categories,
+        "Statuses": filter_statuses
     }
 
     body = {
@@ -193,6 +195,7 @@ async def get_all_tasks_by_filter():
 
         # Calculate the total number of pages
         total_pages = (total_requests // 100) + 1
+        logging.info(f"Found {total_pages} pages of tasks in Gandiva.")
 
         # Create a list of tasks for all remaining pages
         tasks = [

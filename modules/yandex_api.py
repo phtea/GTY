@@ -327,6 +327,38 @@ async def get_all_tasks(queue: str = "TEA",
     # Return False if no tasks were found; otherwise, return the full list of tasks
     return all_yandex_tasks if all_yandex_tasks else False
 
+async def get_tasks_by_gandiva_ids(gandiva_ids: str|list) -> list:
+    # Initialize the request body
+    body = {}
+    per_page = 5000
+
+    # Get tasks by gandiva ids
+    body["filter"] = {"unique": gandiva_ids}
+
+    # Convert the body to a JSON string
+    body_json = json.dumps(body)
+
+    # Set up the headers
+    headers = {
+        "Content-type": "application/json",
+        "X-Cloud-Org-Id": YA_X_CLOUD_ORG_ID,
+        "Authorization": f"OAuth {YA_ACCESS_TOKEN}"
+    }
+
+    url = f"{HOST}/v2/issues/_search?perPage={per_page}"
+
+    # Use aiohttp to make the HTTP POST request
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, data=body_json, headers=headers) as response:
+            # Check if the response is successful
+            if response.status in [200, 201]:
+                return await response.json()  # Return the JSON response
+            else:
+                logging.error(f"Failed to get tasks: {response.status} - {await response.text()}")
+                return False
+    
+
+
 async def add_task(task_id_gandiva,
                    initiator_name,
                    description="Без описания",
@@ -424,7 +456,7 @@ async def add_task(task_id_gandiva,
         logging.error(f"Exception occurred while adding task {task_id_gandiva}: {str(e)}")
         return False  # Return False if an exception occurs
 
-async def add_tasks(tasks_gandiva, queue="TEA"):
+async def add_tasks(tasks_gandiva, queue="TEA") -> list:
     """
     Adds tasks from Gandiva to Yandex Tracker if they do not already exist in Yandex Tracker.
 
@@ -432,6 +464,7 @@ async def add_tasks(tasks_gandiva, queue="TEA"):
     :param queue: The queue to which tasks should be added
     """
     # Create a new aiohttp session
+    existing_ids = []
     async with aiohttp.ClientSession() as session:
         for task in tasks_gandiva:
             task_id = str(task['Id'])
@@ -441,10 +474,13 @@ async def add_tasks(tasks_gandiva, queue="TEA"):
             description_html = task['Description']
             description = extract_text_from_html(description_html)  # Assuming a helper function to extract text from HTML
             assignee_login_yandex = ""
-            task_type = ""
+            task_type = "improvement"
 
             # Add the task to Yandex Tracker
-            await add_task(task_id, initiator_name, description, queue, assignee_login_yandex, task_type, session)
+            response = await add_task(task_id, initiator_name, description, queue, assignee_login_yandex, task_type, session)
+            if response == 409:
+                existing_ids.append(task_id)
+    return existing_ids
 
 async def edit_task(task_id_yandex,
                     summary=None,
@@ -546,6 +582,195 @@ async def edit_task(task_id_yandex,
         logging.error(f"Exception occurred while updating task {task_id_yandex}: {str(e)}")
         return False  # Return False if an exception occurs
 
+async def move_task_status(
+    task_id_yandex,
+    transition_id,
+    comment="",
+    resolution="fixed",  # Default resolution when closing the task
+    session=None  # Accept session as a parameter
+):
+    """
+    Asynchronously moves a task to another status in the Yandex Tracker.
+
+    This function constructs a POST request to execute a transition for an existing task in the Yandex Tracker API.
+    If the transition ID is "close", it adds a "resolution" to the request body.
+
+    Parameters:
+    - task_id_gandiva (str or int): The unique identifier for the task in Gandiva. 
+                                     This will be converted to a string.
+    - transition_id (str or int): The identifier of the transition to be executed.
+    - comment (str, optional): A comment to add during the transition. Defaults to an empty string.
+    - resolution (str, optional): The resolution for closing the task. Defaults to "fixed".
+    - session (aiohttp.ClientSession, optional): An optional aiohttp session object to use for the request. 
+                                                 If None, an exception will be raised.
+
+    Returns:
+    - dict or bool: Returns the JSON response from the API if the task status is successfully changed, 
+                    and returns False for any errors or exceptions.
+
+    Raises:
+    - ValueError: If session is None.
+
+    Notes:
+    - Proper error handling is implemented to catch exceptions during the request.
+    
+    Example Usage:
+    >>> await move_task_status(task_id_gandiva="TEST-1", transition_id="close", comment="Closing the task")
+    """
+    if session is None:
+        raise ValueError("Session must be provided.")
+
+    # Convert the task ID to a string
+    task_id_yandex = str(task_id_yandex)
+
+    # Prepare the request body
+    body = {
+        "comment": comment
+    }
+
+    # Add resolution if the transition is "close"
+    if transition_id == "close":
+        # Add the provided resolution or default to "fixed"
+        body["resolution"] = resolution
+
+    # Convert the body to a JSON string
+    body_json = json.dumps(body)
+
+    # Set up the headers
+    headers = {
+        "Content-type": "application/json",
+        "X-Cloud-Org-Id": YA_X_CLOUD_ORG_ID,
+        "Authorization": f"OAuth {YA_ACCESS_TOKEN}"
+    }
+
+    # Construct the URL for moving the task
+    url = f"{HOST}/v2/issues/{task_id_yandex}/transitions/{transition_id}/_execute"
+
+    try:
+        # Make the HTTP POST request using the session
+        async with session.post(url, data=body_json, headers=headers) as response:
+            sc = response.status
+            response_text = await response.text()  # Get the response text for logging
+
+            # Check if the response is successful
+            if sc in [200, 201]:
+                logging.info(f"Task {task_id_yandex} successfully moved to new status!")
+                return await response.json()  # Return the JSON response
+            else:
+                logging.error(f"Failed to move task {task_id_yandex} to new status: {sc} - {response_text}")
+                return False  # Return False for any other error
+    except Exception as e:
+        logging.error(f"Exception occurred while moving task {task_id_yandex} to new status: {str(e)}")
+        return False  # Return False if an exception occurs
+
+async def batch_move_tasks_status(
+    gandiva_requests,  # List of Gandiva requests containing "Id" and "Status"
+):
+    """
+    Asynchronously moves multiple tasks to their corresponding statuses in the Yandex Tracker based on the 
+    Gandiva request's "Status" field by calling the move_task_status function.
+
+    Parameters:
+    - gandiva_requests (list of dict): A list of Gandiva requests, each containing at least 'Id' and 'Status'.
+    - session (aiohttp.ClientSession, optional): An optional aiohttp session object to use for the request. 
+                                                 If None, an exception will be raised.
+
+    Returns:
+    - dict: A dictionary with task IDs as keys and the API responses (or errors) as values.
+
+    Raises:
+    - ValueError: If session is None.
+
+    Notes:
+    - Proper error handling is implemented to catch exceptions during the request.
+    
+    Example Usage:
+    >>> await batch_move_tasks_status(gandiva_requests=[{"Id": "TEST-1", "Status": 4}])
+    """
+
+    # Mapping of Gandiva Status to Yandex Tracker transition_id
+    status_to_transition = {
+        4: "fourinformationrequiredMeta",
+        5: "onecancelledMeta",
+        6: "threewritingtechnicalspecificMeta",
+        8: "acceptanceintheworkbaseMeta",
+        10: "twowaitingfortheanalystMeta",
+        11: "twowaitingfortheanalystMeta",
+        12: "twowaitingfortheanalystMeta",
+        13: "threewritingtechnicalspecificMeta"
+    }
+
+    results = {}
+    async with aiohttp.ClientSession() as session:
+        for request in gandiva_requests:
+            task_id_gandiva = str(request['Id'])
+            task_yandex = await get_tasks_by_gandiva_ids(task_id_gandiva)
+            task_id_yandex = task_yandex[0]["key"] if task_yandex else None
+            current_status = task_yandex[0]['status']['key'] + "Meta" if task_yandex else None
+            status = request['Status']
+            transition_id = status_to_transition.get(status)
+
+            # If a transition ID is found for the status, move the task status
+            if not transition_id:
+                logging.warning(f"No transition ID found for task {task_id_gandiva} with status code {status}")
+                results[task_id_gandiva] = False  # Mark as failed if no transition is found
+                continue
+            if task_id_yandex is None:
+                logging.warning(f"No task ID found for gandiva task {task_id_gandiva}")
+                results[task_id_gandiva] = False  # Mark as failed if no transition is found
+                continue
+            if current_status == transition_id:
+                logging.info(f"Task {task_id_yandex} is already in status {current_status[:-4]}")
+                continue
+            try:
+                result = await move_task_status(
+                    task_id_yandex=task_id_yandex,
+                    transition_id=transition_id,
+                    comment=f"Task status has been successfully moved to {transition_id} for {task_id_yandex}.",
+                    session=session)
+                results[task_id_gandiva] = result
+            except Exception as e:
+                logging.error(f"Exception occurred while processing task {task_id_gandiva}: {str(e)}")
+                results[task_id_gandiva] = False
+    return results
+
+async def batch_edit_tasks(values: dict,
+                           issues: list):
+
+    # Prepare the request body
+    body = {
+        "values": values,
+        "issues": issues
+    }
+
+    # Convert the body to a JSON string
+    body_json = json.dumps(body)
+
+    # Set up the headers
+    headers = {
+        "Content-type": "application/json",
+        "X-Cloud-Org-Id": YA_X_CLOUD_ORG_ID,
+        "Authorization": f"OAuth {YA_ACCESS_TOKEN}"
+    }
+
+    # Construct the URL for moving the task
+    url = f"{HOST}/v2/bulkchange/_update"
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, data=body_json, headers=headers) as response:
+                sc = response.status
+                response_text = await response.text()  # Get the response text for logging
+
+                if sc in [200, 201]:
+                    logging.info(f"Bulkchange good")
+                    return await response.json()  # Return the JSON response
+                else:
+                    logging.error(f"Failed to Bulkchange. // [{sc}]")
+                    return False  # Return False for any other error
+    except Exception as e:
+        logging.error(f"Exception occurred while Bulkchanging")
+        return False  # Return False if an exception occurs
 
 import time # using for timing functions
 async def main():
@@ -554,7 +779,9 @@ async def main():
     start_time = time.time()
     # async with aiohttp.ClientSession() as session:
     #     res = await edit_task(task_id_yandex="tea-1", summary="new summary", description="new desc", followers="phtea", session=session)
-    res = await get_all_tasks(expand="transitions", queue="tea")
+    # res = await get_all_tasks(expand="transitions", queue="tea")
+        # print(await move_task_status(task_id_yandex="tea-1", transition_id="close", comment="пофиксили", session=session))
+    res = await get_tasks_by_gandiva_ids(["852", "853"])
     print(res)
     print("--- %s seconds ---" % (time.time() - start_time))
     pass

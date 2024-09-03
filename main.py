@@ -78,13 +78,20 @@ async def cancel_handler(message):
 # Main function to start the bot
 async def main():
     # await yandex_api.check_access_token(yandex_api.YA_ACCESS_TOKEN)
-    # await gandiva_api.get_access_token(gandiva_api.GAND_LOGIN, gandiva_api.GAND_PASSWORD)
+    await gandiva_api.get_access_token(gandiva_api.GAND_LOGIN, gandiva_api.GAND_PASSWORD)
 
     tasks = await gandiva_api.get_all_tasks_by_filter()
+    task_ids = [task['Id'] for task in tasks]
     await yandex_api.add_tasks(tasks, "TEA")
+    await yandex_api.batch_move_tasks_status(tasks)
+    # res = await yandex_api.get_all_tasks()
+    # print(f"\n----------------------------------\n{ids}")
+    # await yandex_api.batch_edit_tasks({"type": "improvement"}, issues=ids)
+    
+    
 
-    logging.info("Bot started.")
-    await bot.polling()
+    # logging.info("Bot started.")
+    # await bot.polling()
 
 if __name__ == "__main__":
     asyncio.run(main())
