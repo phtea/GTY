@@ -32,6 +32,8 @@ HOST = "https://api-gandiva.s-stroy.ru"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
+# Authorization block
+
 async def get_access_token(username, password):
     """Updates GAND_ACCESS_TOKEN and GAND_REFRESH_TOKEN from login+password
     
@@ -68,7 +70,6 @@ async def get_access_token(username, password):
             dotenv.set_key(DOTENV_PATH, "GAND_REFRESH_TOKEN", refresh_token)
 
             return access_token
-
 
 async def refresh_access_token(refresh_token):
     """Gets and updates access_token + refresh_token
@@ -107,8 +108,8 @@ async def refresh_access_token(refresh_token):
 
             return access_token
 
-#  We pass session to functions which are going to be reused often 
-# (using a single session for multiple requests is more effective)
+# Functions
+
 async def get_task_by_id(session, request_id):
     headers = {
         "Content-type": "application/x-www-form-urlencoded",
