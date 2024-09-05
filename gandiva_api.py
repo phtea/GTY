@@ -9,15 +9,17 @@ import dotenv
 import json
 import csv
 
-DOTENV_PATH = os.path.join(os.path.dirname(__file__), os.pardir)
-DOTENV_PATH = os.path.join(DOTENV_PATH, '.env')
-if os.path.exists(DOTENV_PATH):
-    dotenv.load_dotenv(DOTENV_PATH)
+# Load environment variables
+DOTENV_PATH = ".env"
+dotenv.load_dotenv()
 
 GAND_ACCESS_TOKEN   = os.environ.get("GAND_ACCESS_TOKEN")
 GAND_REFRESH_TOKEN   = os.environ.get("GAND_REFRESH_TOKEN")
 GAND_PASSWORD       = os.environ.get("GAND_PASSWORD")
 GAND_LOGIN          = os.environ.get("GAND_LOGIN")
+
+# Dictionary for caching user departments
+user_department_cache = {}
 
 # TODO: before each request add token regeneration if token expired
 
@@ -26,8 +28,9 @@ if not (GAND_PASSWORD and GAND_LOGIN):
     raise ValueError("""Not enough data found in environment variables. Please check your .env file:
                      GAND_PASSWORD
                      GAND_LOGIN""")
-
 HOST = "https://api-gandiva.s-stroy.ru"
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 async def get_access_token(username, password):
     """Updates GAND_ACCESS_TOKEN and GAND_REFRESH_TOKEN from login+password
@@ -100,7 +103,7 @@ async def refresh_access_token(refresh_token):
             GAND_REFRESH_TOKEN = refresh_token
             os.environ["GAND_REFRESH_TOKEN"] = refresh_token
             dotenv.set_key(DOTENV_PATH, "GAND_REFRESH_TOKEN", refresh_token)
-            print('All good')
+            logging.info('Successfully refreshed Gandiva token')
 
             return access_token
 
@@ -122,6 +125,12 @@ async def get_task_by_id(session, request_id):
             return False
 
 async def get_department_by_user_id(session, user_id):
+
+    # Check if the result is already cached
+    if user_id in user_department_cache:
+        logging.info(f"Returning cached department for user {user_id}")
+        return user_department_cache[user_id]
+
     headers = {
         "Content-type": "application/x-www-form-urlencoded",
         "Authorization": f"Bearer {GAND_ACCESS_TOKEN}"
@@ -133,7 +142,13 @@ async def get_department_by_user_id(session, user_id):
         if response.status == 200:
             user_data = await response.json()
             logging.info(f"Succesfully gathered user {user_id}")
-            return user_data.get("Department")
+
+            department = user_data.get("Department")
+            
+            # Cache the department value
+            user_department_cache[user_id] = department
+
+            return department
         else:
             logging.error(f"Error for user {user_id} <{response.status}>")
             return None
@@ -145,7 +160,7 @@ async def get_departments_for_users(user_ids):
     unique_departments = list(set(departments))
     return unique_departments     
 
-async def get_page_of_tasks_by_filter(session, page_number):
+async def get_page_of_tasks(session, page_number):
     headers = {
         "Content-type": "application/json",
         "Authorization": f"Bearer {GAND_ACCESS_TOKEN}"
@@ -181,12 +196,90 @@ async def get_page_of_tasks_by_filter(session, page_number):
             logging.error(f"Failed to fetch page {page_number}: {response.status} - {await response.text()}")
             return False
 
-async def get_all_tasks_by_filter():
+# Define the function to get comments for a specific task
+async def get_task_comments(task_id, session=None):
+    """
+    Asynchronously retrieves comments for a specific task by its ID.
+
+    Parameters:
+    - task_id (int): The ID of the task to retrieve comments for.
+    - session (aiohttp.ClientSession, optional): An optional aiohttp session object to use for the request.
+                                                 If None, an exception will be raised.
+
+    Returns:
+    - list: A list of comments associated with the task, or an empty list if there are no comments or an error occurs.
+
+    Raises:
+    - ValueError: If session is None.
+
+    Example Usage:
+    >>> comments = await get_task_comments(task_id=12345, session=session)
+    """
+    if session is None:
+        raise ValueError("Session must be provided.")
+
+    # Set up the headers
+    headers = {
+        "Content-type": "application/json",
+        "Authorization": f"Bearer {GAND_ACCESS_TOKEN}"
+    }
+
+    # Construct the URL for the GET request
+    endpoint = f"/api/Requests/{task_id}/Comments"
+    url = HOST + endpoint
+
+    try:
+        # Make the HTTP GET request using the session
+        async with session.get(url, headers=headers) as response:
+            if response.status in [200, 201]:
+                logging.info(f"Comments for task {task_id} fetched successfully.")
+                return await response.json()
+            else:
+                logging.error(f"Failed to fetch comments for task {task_id}: {response.status} - {await response.text()}")
+                return []  # Return an empty list in case of failure
+    except Exception as e:
+        logging.error(f"Exception occurred while fetching comments for task {task_id}: {str(e)}")
+        return []  # Return an empty list if an exception occurs
+
+# Define the function to get comments for a list of task IDs concurrently
+async def get_comments_for_tasks(task_ids: list[int]):
+    """
+    Asynchronously retrieves comments for a list of tasks by their IDs.
+
+    Parameters:
+    - task_ids (list): A list of task IDs to retrieve comments for.
+
+    Returns:
+    - dict: A dictionary where the keys are task IDs and the values are lists of comments associated with those tasks.
+            If a task fails to retrieve comments, its value will be an empty list.
+    
+    Example Usage:
+    >>> task_comments = await get_comments_for_tasks([12345, 67890])
+    """
+    task_comments = {}
+
+    async with aiohttp.ClientSession() as session:
+        # Create a list of tasks for fetching comments for each task ID
+        tasks = [
+            get_task_comments(task_id, session)
+            for task_id in task_ids
+        ]
+
+        # Run all tasks concurrently
+        responses = await asyncio.gather(*tasks)
+
+        # Collect the comments for each task ID
+        for task_id, comments in zip(task_ids, responses):
+            task_comments[task_id] = comments
+
+    return task_comments
+
+async def get_all_tasks():
     all_requests = []
     
     async with aiohttp.ClientSession() as session:
         # Fetch the first page to get the total count and number of pages
-        first_page_data = await get_page_of_tasks_by_filter(session, 1)
+        first_page_data = await get_page_of_tasks(session, 1)
         if not first_page_data:
             return all_requests  # Return an empty list if the first page request fails
 
@@ -199,7 +292,7 @@ async def get_all_tasks_by_filter():
 
         # Create a list of tasks for all remaining pages
         tasks = [
-            get_page_of_tasks_by_filter(session, page_number)
+            get_page_of_tasks(session, page_number)
             for page_number in range(2, total_pages + 1)
         ]
 
@@ -223,32 +316,6 @@ def get_all_unique_initiators(data):
     # Output the unique IDs
     return unique_initiator_ids_list
 
-import time # using for timing functions
-async def main():
-    # response = await get_page_of_requests_by_filter(1)
-    # response = await get_request_by_id(1002)
-    
-
-
-    # async with aiohttp.ClientSession() as session:
-        # response = await get_page_of_tasks_by_filter(page_number=1, session=session)
-        # res = await get_department_by_user_id(session=session, user_id=138)
-
-
-    await get_access_token(GAND_LOGIN, GAND_PASSWORD)
-    start_time = time.time()
-
-    response_tasks = await get_all_tasks_by_filter()
-    
-    user_ids = get_all_unique_initiators(response_tasks)
-
-    dep_ids = await get_departments_for_users(user_ids)
-
-    print(dep_ids)
-
-    save_list_to_csv(dep_ids, 'department_names.csv')
-    print("--- %s seconds ---" % (time.time() - start_time))
-
 
 def save_list_to_csv(data_list, filename):
     with open(filename, mode='w', newline='') as file:
@@ -256,7 +323,27 @@ def save_list_to_csv(data_list, filename):
         for item in data_list:
             writer.writerow([item])  # Write each item in a new row
 
+import time # using for timing functions
+async def main():
 
+    await get_access_token(GAND_LOGIN, GAND_PASSWORD)
+
+        # response = await get_page_of_tasks_by_filter(page_number=1, session=session)
+        # res = await get_department_by_user_id(session=session, user_id=138)
+
+
+    start_time = time.time()
+    # await get_all_tasks_by_filter()
+    task_ids = [852, 853, 4382]
+    tasks_comments = await get_comments_for_tasks(task_ids)
+    
+    # user_ids = get_all_unique_initiators(response_tasks)
+
+    # dep_ids = await get_departments_for_users(user_ids)
+
+    # print(dep_ids)
+
+    print("--- %s seconds ---" % (time.time() - start_time))
 
 if __name__ == '__main__':
     # get_access_token(GAND_LOGIN, GAND_PASSWORD)

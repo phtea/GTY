@@ -6,14 +6,30 @@ import requests
 import asyncio
 import aiohttp
 from bs4 import BeautifulSoup
+import gandiva_api
+
+GANDIVA_TASK_URL = "https://gandiva.s-stroy.ru/Request/Edit/"
+
+# Custom fields key names:
+YANDEX_FIELD_ID_GANDIVA = "66d379ee99b2de14092e0185--Gandiva"
+YANDEX_FIELD_ID_INITIATOR = "66d379ee99b2de14092e0185--Initiator"
+YANDEX_FIELD_ID_INITIATOR_DEPARTMENT = "66d379ee99b2de14092e0185--InitiatorDepartment"
+
+import db_module as db
 
 # String manipulations
 import urllib.parse
 
-DOTENV_PATH = os.path.join(os.path.dirname(__file__), os.pardir)
-DOTENV_PATH = os.path.join(DOTENV_PATH, '.env')
-if os.path.exists(DOTENV_PATH):
-    dotenv.load_dotenv(DOTENV_PATH)
+# Define the database URL
+DB_URL = 'sqlite:///project.db'  # Using SQLite for simplicity
+
+# Create the database and tables
+DB_ENGINE = db.create_database(DB_URL)
+DB_SESSION = db.get_session(DB_ENGINE)
+
+# Load environment variables
+DOTENV_PATH = ".env"
+dotenv.load_dotenv()
 
 
 YA_X_CLOUD_ORG_ID   = os.environ.get("YA_X_CLOUD_ORG_ID")
@@ -35,9 +51,7 @@ YA_INFO_TOKEN_URL   = "https://login.yandex.ru/info"
 HOST = "https://api.tracker.yandex.net"
 
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 def extract_text_from_html(html):
     soup = BeautifulSoup(html, "html.parser")
@@ -356,15 +370,35 @@ async def get_tasks_by_gandiva_ids(gandiva_ids: str|list) -> list:
             else:
                 logging.error(f"Failed to get tasks: {response.status} - {await response.text()}")
                 return False
-    
 
+async def get_task(task_id: str) -> dict:
+    """Returns task (dictionary type) """
+    # Set up the headers
+    headers = {
+        "Content-type": "application/json",
+        "X-Cloud-Org-Id": YA_X_CLOUD_ORG_ID,
+        "Authorization": f"OAuth {YA_ACCESS_TOKEN}"
+    }
+
+    url = f"{HOST}/v2/issues/{task_id}"
+
+    # Use aiohttp to make the HTTP POST request
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, headers=headers) as response:
+            # Check if the response is successful
+            if response.status in [200, 201]:
+                return await response.json()  # Return the JSON response
+            else:
+                logging.error(f"Failed to get task: {response.status} - {await response.text()}")
+                return False
 
 async def add_task(task_id_gandiva,
                    initiator_name,
                    description="Без описания",
                    queue="TEA",
-                   assignee_yandex_login="",
-                   task_type="",
+                   assignee_yandex_id=None,
+                   task_type=None,
+                   initiator_department=None,
                    session=None):
     """
     Asynchronously adds a new task to the Yandex Tracker.
@@ -404,6 +438,10 @@ async def add_task(task_id_gandiva,
     # Convert the task ID to a string
     task_id_gandiva = str(task_id_gandiva)
 
+    task_in_db = db.find_task_by_gandiva_id(DB_SESSION, task_id_gandiva=task_id_gandiva)
+    if task_in_db:
+        return task_in_db
+
     # Construct the task summary
     task_summary = f"{task_id_gandiva}. {description[:50]}..."
 
@@ -412,16 +450,20 @@ async def add_task(task_id_gandiva,
         "summary": task_summary,
         "description": description,
         "queue": queue,
-        "66d379ee99b2de14092e0185--Initiator": initiator_name,
-        "unique": task_id_gandiva
+        YANDEX_FIELD_ID_INITIATOR: initiator_name,
+        YANDEX_FIELD_ID_GANDIVA: GANDIVA_TASK_URL + task_id_gandiva,
+        "unique": task_id_gandiva,
     }
 
     # Optionally add assignee and task type if provided
-    if assignee_yandex_login:
-        body["assignee"] = assignee_yandex_login
+    if assignee_yandex_id:
+        body["assignee"] = assignee_yandex_id
 
     if task_type:
         body["type"] = task_type
+    
+    if initiator_department:
+        body[YANDEX_FIELD_ID_INITIATOR_DEPARTMENT] = initiator_department
 
     # Convert the body to a JSON string
     body_json = json.dumps(body)
@@ -440,23 +482,28 @@ async def add_task(task_id_gandiva,
         # Make the HTTP POST request using the session
         async with session.post(url, data=body_json, headers=headers) as response:
             sc = response.status
-            response_text = await response.text()  # Get the response text for logging
+            response_json = await response.json()  # Get the response text for logging
 
             # Check if the response is successful
             if sc in [200, 201]:
+                task_id_yandex = response_json['key']
+                new_task = db.Task(task_id_yandex=task_id_yandex, task_id_gandiva=task_id_gandiva)
+                DB_SESSION.add(new_task)
+                logging.info(f"Task {task_id_yandex} added to the database.")
+                DB_SESSION.commit()
                 logging.info(f"Task {task_id_gandiva} successfully added!")
-                return await response.json()  # Return the json
+                return response_json  # Return the json
             elif sc == 409:
-                logging.info(f"Task {task_id_gandiva} already exists")
+                logging.info(f"Task {task_id_gandiva} already exists (api)")
                 return sc  # we can handle this status code later
             else:
-                logging.error(f"Failed to add task {task_id_gandiva}: {sc} - {response_text}")
+                logging.error(f"Failed to add task {task_id_gandiva}: {sc} - {response_json}")
                 return False  # Return False for any other error
     except Exception as e:
         logging.error(f"Exception occurred while adding task {task_id_gandiva}: {str(e)}")
         return False  # Return False if an exception occurs
 
-async def add_tasks(tasks_gandiva, queue="TEA") -> list:
+async def add_or_edit_tasks(tasks_gandiva, queue="TEA"):
     """
     Adds tasks from Gandiva to Yandex Tracker if they do not already exist in Yandex Tracker.
 
@@ -464,33 +511,70 @@ async def add_tasks(tasks_gandiva, queue="TEA") -> list:
     :param queue: The queue to which tasks should be added
     """
     # Create a new aiohttp session
-    existing_ids = []
+
     async with aiohttp.ClientSession() as session:
         for task in tasks_gandiva:
-            task_id = str(task['Id'])
+            gandiva_task_id = str(task['Id'])
 
             # Extract and format task details
             initiator_name = f"{task['Initiator']['FirstName']} {task['Initiator']['LastName']}"
             description_html = task['Description']
             description = extract_text_from_html(description_html)  # Assuming a helper function to extract text from HTML
-            assignee_login_yandex = ""
+            assignee_id_yandex = ""
             task_type = "improvement"
+            # TODO: get initiator's department from db??
+            initiator_id = task['Initiator']['Id']
+            initiator_department = await gandiva_api.get_department_by_user_id(user_id=initiator_id, session=session)
 
             # Add the task to Yandex Tracker
-            response = await add_task(task_id, initiator_name, description, queue, assignee_login_yandex, task_type, session)
-            if response == 409:
-                existing_ids.append(task_id)
-    return existing_ids
+            response = await add_task(gandiva_task_id, initiator_name,
+                                      initiator_department=initiator_department,
+                                      description=description,
+                                      queue=queue,
+                                      assignee_yandex_id=assignee_id_yandex,
+                                      task_type=task_type,
+                                      session=session)
+            # if a task is in db already, edit it:
+            if isinstance(response, db.Task):
+                # by default all edit fields are none, and only if yandex tracker's field is empty, change it to not none
+                task_id_yandex = response.task_id_yandex
+
+                edit_initiator_name = None
+                edit_initiator_department = None
+                edit = None
+
+                task_yandex = await get_task(task_id_yandex)
+                if initiator_name and not task_yandex.get(YANDEX_FIELD_ID_INITIATOR):
+                    edit_initiator_name = initiator_name
+                if not task_yandex.get(YANDEX_FIELD_ID_GANDIVA):
+                    edit = True
+                if initiator_department and not task_yandex.get(YANDEX_FIELD_ID_INITIATOR_DEPARTMENT):
+                    edit_initiator_department = initiator_department
+                if edit_initiator_name or edit or edit_initiator_department:
+                    await edit_task(task_id_yandex=task_id_yandex,
+                                    session=session,
+                                    initiator_name=edit_initiator_name,
+                                    initiator_department=edit_initiator_department)
+                else:
+                    logging.info(f"Task {gandiva_task_id} is already up-to-date.")
+                # TODO: add analyst and assignee later
+                # if not task_yandex['66d379ee99b2de14092e0185--Analyst']:
+                #     edit_analyst = (???)
+                # if not task_yandex['assignee'] and assignee_id_yandex:
+                #     edit_assignee_id_yandex = assignee_id_yandex
+                
 
 async def edit_task(task_id_yandex,
                     summary=None,
                     description=None,
-                    assignee_yandex_login=None,
+                    assignee_id_yandex=None,
                     task_type=None,
                     priority=None,
                     parent=None,
                     sprint=None,
                     followers=None,
+                    initiator_name=None,
+                    initiator_department=None,
                     session=None):
     """
     Asynchronously updates an existing task in the Yandex Tracker.
@@ -534,13 +618,16 @@ async def edit_task(task_id_yandex,
 
     # Prepare the request body
     body = {}
-
+    task_in_db = db.find_task_by_yandex_id(session=DB_SESSION, task_id_yandex=task_id_yandex)
+    if task_in_db:
+        task_id_gandiva = task_in_db.task_id_gandiva
+        body[YANDEX_FIELD_ID_GANDIVA] = GANDIVA_TASK_URL + task_id_gandiva
     if summary:
         body["summary"] = summary
     if description:
         body["description"] = description
-    if assignee_yandex_login:
-        body["assignee"] = assignee_yandex_login
+    if assignee_id_yandex:
+        body["assignee"] = assignee_id_yandex
     if task_type:
         body["type"] = task_type
     if priority:
@@ -551,6 +638,10 @@ async def edit_task(task_id_yandex,
         body["sprint"] = sprint
     if followers:
         body["followers"] = {"add": followers}
+    if initiator_name:
+        body[YANDEX_FIELD_ID_INITIATOR] = initiator_name
+    if initiator_department:
+        body[YANDEX_FIELD_ID_INITIATOR_DEPARTMENT] = initiator_department
 
     # Convert the body to a JSON string
     body_json = json.dumps(body)
@@ -623,6 +714,9 @@ async def move_task_status(
     # Convert the task ID to a string
     task_id_yandex = str(task_id_yandex)
 
+    if not comment:
+        comment=f"Task status has been successfully moved to {transition_id} for {task_id_yandex}."
+
     # Prepare the request body
     body = {
         "comment": comment
@@ -663,9 +757,7 @@ async def move_task_status(
         logging.error(f"Exception occurred while moving task {task_id_yandex} to new status: {str(e)}")
         return False  # Return False if an exception occurs
 
-async def batch_move_tasks_status(
-    gandiva_requests,  # List of Gandiva requests containing "Id" and "Status"
-):
+async def batch_move_tasks_status(gandiva_tasks: list):
     """
     Asynchronously moves multiple tasks to their corresponding statuses in the Yandex Tracker based on the 
     Gandiva request's "Status" field by calling the move_task_status function.
@@ -700,39 +792,42 @@ async def batch_move_tasks_status(
         13: "threewritingtechnicalspecificMeta"
     }
 
-    results = {}
     async with aiohttp.ClientSession() as session:
-        for request in gandiva_requests:
-            task_id_gandiva = str(request['Id'])
-            task_yandex = await get_tasks_by_gandiva_ids(task_id_gandiva)
-            task_id_yandex = task_yandex[0]["key"] if task_yandex else None
-            current_status = task_yandex[0]['status']['key'] + "Meta" if task_yandex else None
-            status = request['Status']
-            transition_id = status_to_transition.get(status)
+        for task in gandiva_tasks:
+            task_id_gandiva = str(task['Id'])
+            gandiva_status = task['Status']
+            transition_id = status_to_transition.get(gandiva_status)
+            yandex_status = transition_id[:-4]
+            current_yandex_status = None
+            task_id_yandex = None
+
+            task_in_db = db.find_task_by_gandiva_id(DB_SESSION, task_id_gandiva=task_id_gandiva)
+            if task_in_db:
+                task_id_yandex = task_in_db.task_id_yandex
+                if task_id_yandex is None:
+                    logging.warning(f"The task {task_id_gandiva} is in db, but task_id_yandex is empty. (???) I guess it's on gandiva but still not on yandex, that's why")
+                    continue
+                task_yandex = await get_tasks_by_gandiva_ids(task_id_gandiva)
+                if task_yandex:
+                    current_yandex_status = task_yandex[0]['status']['key']
+                if current_yandex_status == yandex_status:
+                    logging.info(f"Task {task_id_yandex} is already in status {yandex_status}")
+                    continue
 
             # If a transition ID is found for the status, move the task status
             if not transition_id:
-                logging.warning(f"No transition ID found for task {task_id_gandiva} with status code {status}")
-                results[task_id_gandiva] = False  # Mark as failed if no transition is found
+                logging.warning(f"No transition ID found for task {task_id_gandiva} with status code {gandiva_status}")
                 continue
             if task_id_yandex is None:
                 logging.warning(f"No task ID found for gandiva task {task_id_gandiva}")
-                results[task_id_gandiva] = False  # Mark as failed if no transition is found
-                continue
-            if current_status == transition_id:
-                logging.info(f"Task {task_id_yandex} is already in status {current_status[:-4]}")
                 continue
             try:
-                result = await move_task_status(
+                await move_task_status(
                     task_id_yandex=task_id_yandex,
                     transition_id=transition_id,
-                    comment=f"Task status has been successfully moved to {transition_id} for {task_id_yandex}.",
                     session=session)
-                results[task_id_gandiva] = result
             except Exception as e:
                 logging.error(f"Exception occurred while processing task {task_id_gandiva}: {str(e)}")
-                results[task_id_gandiva] = False
-    return results
 
 async def batch_edit_tasks(values: dict,
                            issues: list):
@@ -772,19 +867,38 @@ async def batch_edit_tasks(values: dict,
         logging.error(f"Exception occurred while Bulkchanging")
         return False  # Return False if an exception occurs
 
+# TODO
+async def add_comments_to_task(task_id_comment: dict):
+    pass
+# TODO
+async def batch_add_comments_to_tasks(task_id_comments: dict):
+    pass
+
+def filter_tasks_with_unique(tasks):
+    """
+    Filters and returns only the tasks that contain the 'unique' key.
+
+    Parameters:
+    - tasks (list[dict]): List of tasks, each represented as a dictionary.
+
+    Returns:
+    - list[dict]: A list of tasks that have the 'unique' key.
+    """
+    return [task for task in tasks if 'unique' in task]
+
 import time # using for timing functions
 async def main():
-    
     # await refresh_access_token(YA_REFRESH_TOKEN)
     start_time = time.time()
-    # async with aiohttp.ClientSession() as session:
-    #     res = await edit_task(task_id_yandex="tea-1", summary="new summary", description="new desc", followers="phtea", session=session)
-    # res = await get_all_tasks(expand="transitions", queue="tea")
-        # print(await move_task_status(task_id_yandex="tea-1", transition_id="close", comment="пофиксили", session=session))
-    res = await get_tasks_by_gandiva_ids(["852", "853"])
-    print(res)
+
+    await add_existing_tracker_tasks_to_db()
     print("--- %s seconds ---" % (time.time() - start_time))
     pass
+
+async def add_existing_tracker_tasks_to_db():
+    res = await get_all_tasks()
+    res = filter_tasks_with_unique(res)
+    db.add_tasks_to_db(session=DB_SESSION, tasks=res)
 
 if __name__ == '__main__':
     asyncio.run(main())
