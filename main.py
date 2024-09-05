@@ -5,18 +5,25 @@ from telebot.async_telebot import AsyncTeleBot
 from telebot.types import ReplyKeyboardRemove
 from telebot import custom_filters
 
-import modules.gandiva_api as gandiva_api
-import modules.yandex_api as yandex_api
+import gandiva_api as gandiva_api
+import yandex_api as yandex_api
+import db_module as db
+import aiohttp
 
 # Load environment variables
 from dotenv import load_dotenv
-
 load_dotenv()
 TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN")
-
 # Handle not enough data in .env
 if not TG_BOT_TOKEN:
     raise ValueError("No TG_BOT_TOKEN found in environment variables. Please check your .env file.")
+
+# Define the database URL
+DB_URL = 'sqlite:///project.db'  # Using SQLite for simplicity
+
+# Create the database and tables
+DB_ENGINE = db.create_database(DB_URL)
+DB_SESSION = db.get_session(DB_ENGINE)
 
 # Initialize the bot
 bot = AsyncTeleBot(TG_BOT_TOKEN)
@@ -79,17 +86,23 @@ async def cancel_handler(message):
 async def main():
     # await yandex_api.check_access_token(yandex_api.YA_ACCESS_TOKEN)
     await gandiva_api.get_access_token(gandiva_api.GAND_LOGIN, gandiva_api.GAND_PASSWORD)
-
-    tasks = await gandiva_api.get_all_tasks_by_filter()
-    task_ids = [task['Id'] for task in tasks]
-    await yandex_api.add_tasks(tasks, "TEA")
-    await yandex_api.batch_move_tasks_status(tasks)
+    tasks = await gandiva_api.get_all_tasks()
+    # tasks = tasks[:10]
+    await yandex_api.add_or_edit_tasks(tasks, "TEA")
+    # await yandex_api.batch_move_tasks_status(tasks)
+    # tasks_db = DB_SESSION.query(db.Task).all()
+    # for task in tasks_db:
+    #     fields_to_print = f"Task ID: {task.task_id_yandex}, Status: {task.status}"
+    #     if task.assignee:
+    #         if task.assignee.yandex_login:
+    #             fields_to_print = fields_to_print + f", Assignee: {task.assignee.yandex_login}"
+    #     print(fields_to_print)
+    return
+    # task_ids = [task['Id'] for task in tasks]
+    print("---------------------------------------\n\n")
     # res = await yandex_api.get_all_tasks()
     # print(f"\n----------------------------------\n{ids}")
     # await yandex_api.batch_edit_tasks({"type": "improvement"}, issues=ids)
-    
-    
-
     # logging.info("Bot started.")
     # await bot.polling()
 
