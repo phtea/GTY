@@ -51,11 +51,18 @@ YA_INFO_TOKEN_URL   = "https://login.yandex.ru/info"
 HOST = "https://api.tracker.yandex.net"
 
 
+
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 def extract_text_from_html(html):
     soup = BeautifulSoup(html, "html.parser")
     return soup.get_text()
+
+HEADERS = {
+        "X-Cloud-Org-Id": YA_X_CLOUD_ORG_ID,
+        "Authorization": f"OAuth {YA_ACCESS_TOKEN}"
+}
 
 def get_account_info(access_token) -> requests.Response:
     """Gets Yandex account info by providing the access_token.
@@ -259,13 +266,6 @@ async def get_page_of_tasks(queue: str = None,
     # Convert the body to a JSON string
     body_json = json.dumps(body)
 
-    # Set up the headers
-    headers = {
-        "Content-type": "application/json",
-        "X-Cloud-Org-Id": YA_X_CLOUD_ORG_ID,
-        "Authorization": f"OAuth {YA_ACCESS_TOKEN}"
-    }
-
     # Construct the URL with the expand and perPage parameters
     url = f"{HOST}/v2/issues/_search?perPage={per_page}"
     if page_number > 1:
@@ -275,7 +275,7 @@ async def get_page_of_tasks(queue: str = None,
 
     # Use aiohttp to make the HTTP POST request
     async with aiohttp.ClientSession() as session:
-        async with session.post(url, data=body_json, headers=headers) as response:
+        async with session.post(url, data=body_json, headers=HEADERS) as response:
             # Check if the response is successful
             if response.status in [200, 201]:
                 return await response.json()  # Return the JSON response
@@ -352,18 +352,11 @@ async def get_tasks_by_gandiva_ids(gandiva_ids: str|list) -> list:
     # Convert the body to a JSON string
     body_json = json.dumps(body)
 
-    # Set up the headers
-    headers = {
-        "Content-type": "application/json",
-        "X-Cloud-Org-Id": YA_X_CLOUD_ORG_ID,
-        "Authorization": f"OAuth {YA_ACCESS_TOKEN}"
-    }
-
     url = f"{HOST}/v2/issues/_search?perPage={per_page}"
 
     # Use aiohttp to make the HTTP POST request
     async with aiohttp.ClientSession() as session:
-        async with session.post(url, data=body_json, headers=headers) as response:
+        async with session.post(url, data=body_json, headers=HEADERS) as response:
             # Check if the response is successful
             if response.status in [200, 201]:
                 return await response.json()  # Return the JSON response
@@ -371,20 +364,14 @@ async def get_tasks_by_gandiva_ids(gandiva_ids: str|list) -> list:
                 logging.error(f"Failed to get tasks: {response.status} - {await response.text()}")
                 return False
 
-async def get_task(task_id: str) -> dict:
+async def get_task(yandex_task_id: str) -> dict:
     """Returns task (dictionary type) """
-    # Set up the headers
-    headers = {
-        "Content-type": "application/json",
-        "X-Cloud-Org-Id": YA_X_CLOUD_ORG_ID,
-        "Authorization": f"OAuth {YA_ACCESS_TOKEN}"
-    }
 
-    url = f"{HOST}/v2/issues/{task_id}"
+    url = f"{HOST}/v2/issues/{yandex_task_id}"
 
     # Use aiohttp to make the HTTP POST request
     async with aiohttp.ClientSession() as session:
-        async with session.get(url, headers=headers) as response:
+        async with session.get(url, headers=HEADERS) as response:
             # Check if the response is successful
             if response.status in [200, 201]:
                 return await response.json()  # Return the JSON response
@@ -468,19 +455,12 @@ async def add_task(task_id_gandiva,
     # Convert the body to a JSON string
     body_json = json.dumps(body)
 
-    # Set up the headers
-    headers = {
-        "Content-type": "application/json",
-        "X-Cloud-Org-Id": YA_X_CLOUD_ORG_ID,
-        "Authorization": f"OAuth {YA_ACCESS_TOKEN}"
-    }
-
     # Construct the URL
     url = f"{HOST}/v2/issues"
 
     try:
         # Make the HTTP POST request using the session
-        async with session.post(url, data=body_json, headers=headers) as response:
+        async with session.post(url, data=body_json, headers=HEADERS) as response:
             sc = response.status
             response_json = await response.json()  # Get the response text for logging
 
@@ -646,19 +626,12 @@ async def edit_task(task_id_yandex,
     # Convert the body to a JSON string
     body_json = json.dumps(body)
 
-    # Set up the headers
-    headers = {
-        "Content-type": "application/json",
-        "X-Cloud-Org-Id": YA_X_CLOUD_ORG_ID,
-        "Authorization": f"OAuth {YA_ACCESS_TOKEN}"
-    }
-
     # Construct the URL for updating the task
     url = f"{HOST}/v2/issues/{task_id_yandex}"
 
     try:
         # Make the HTTP PATCH request using the session
-        async with session.patch(url, data=body_json, headers=headers) as response:
+        async with session.patch(url, data=body_json, headers=HEADERS) as response:
             sc = response.status
             response_text = await response.text()  # Get the response text for logging
 
@@ -730,19 +703,12 @@ async def move_task_status(
     # Convert the body to a JSON string
     body_json = json.dumps(body)
 
-    # Set up the headers
-    headers = {
-        "Content-type": "application/json",
-        "X-Cloud-Org-Id": YA_X_CLOUD_ORG_ID,
-        "Authorization": f"OAuth {YA_ACCESS_TOKEN}"
-    }
-
     # Construct the URL for moving the task
     url = f"{HOST}/v2/issues/{task_id_yandex}/transitions/{transition_id}/_execute"
 
     try:
         # Make the HTTP POST request using the session
-        async with session.post(url, data=body_json, headers=headers) as response:
+        async with session.post(url, data=body_json, headers=HEADERS) as response:
             sc = response.status
             response_text = await response.text()  # Get the response text for logging
 
@@ -841,19 +807,12 @@ async def batch_edit_tasks(values: dict,
     # Convert the body to a JSON string
     body_json = json.dumps(body)
 
-    # Set up the headers
-    headers = {
-        "Content-type": "application/json",
-        "X-Cloud-Org-Id": YA_X_CLOUD_ORG_ID,
-        "Authorization": f"OAuth {YA_ACCESS_TOKEN}"
-    }
-
     # Construct the URL for moving the task
     url = f"{HOST}/v2/bulkchange/_update"
 
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.post(url, data=body_json, headers=headers) as response:
+            async with session.post(url, data=body_json, headers=HEADERS) as response:
                 sc = response.status
                 response_text = await response.text()  # Get the response text for logging
 
@@ -886,19 +845,39 @@ def filter_tasks_with_unique(tasks):
     """
     return [task for task in tasks if 'unique' in task]
 
+async def add_existing_tracker_tasks_to_db():
+    res = await get_all_tasks()
+    res = filter_tasks_with_unique(res)
+    db.add_tasks_to_db(session=DB_SESSION, tasks=res)
+
+async def get_sprints_on_board(board_id: str) -> dict:
+    """Returns task (dictionary type) """
+
+    url = f"{HOST}/v2/boards/{board_id}/sprints"
+
+    # Use aiohttp to make the HTTP POST request
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, headers=HEADERS) as response:
+            # Check if the response is successful
+            if response.status in [200, 201]:
+                return await response.json()  # Return the JSON response
+            else:
+                logging.error(f"Failed to get sessions: {response.status} - {await response.text()}")
+                return None
+
+
+
 import time # using for timing functions
 async def main():
     # await refresh_access_token(YA_REFRESH_TOKEN)
     start_time = time.time()
 
-    await add_existing_tracker_tasks_to_db()
+    # await add_existing_tracker_tasks_to_db()
+    res = await get_sprints_on_board(52)
+    print(res)
     print("--- %s seconds ---" % (time.time() - start_time))
     pass
 
-async def add_existing_tracker_tasks_to_db():
-    res = await get_all_tasks()
-    res = filter_tasks_with_unique(res)
-    db.add_tasks_to_db(session=DB_SESSION, tasks=res)
 
 if __name__ == '__main__':
     asyncio.run(main())
