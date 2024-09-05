@@ -89,7 +89,7 @@ async def main():
     tasks = await gandiva_api.get_all_tasks()
     # tasks = tasks[:10]
     await yandex_api.add_or_edit_tasks(tasks, "TEA")
-    # await yandex_api.batch_move_tasks_status(tasks)
+    await yandex_api.batch_move_tasks_status(tasks)
     # tasks_db = DB_SESSION.query(db.Task).all()
     # for task in tasks_db:
     #     fields_to_print = f"Task ID: {task.task_id_yandex}, Status: {task.status}"
