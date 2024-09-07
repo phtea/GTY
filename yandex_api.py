@@ -6,6 +6,7 @@ import requests
 import asyncio
 import aiohttp
 import gandiva_api
+import datetime
 
 import utils
 
@@ -117,7 +118,7 @@ async def check_access_token(access_token) -> str:
     # Check if the response is successful
     if response.status_code == 200:
         user_info = response.json()  # Parse the JSON response
-        print("Welcome, " + user_info['login'] + "!")
+        logging.info("Authorized to user " + user_info['login'] + "! [Yandex Tracker]")
         return
 
     # If the response is not successful, refresh the access token
@@ -301,13 +302,13 @@ async def get_tasks_count(queue: str = None,
         logging.error(f"Tasks with query: {body} were not found.")
         return None
 
-async def get_all_tasks(queue: str = "TEA",
-                                keys: str | list[str] = None,
-                                filter: dict = None,
-                                query: str = None,
-                                order: str = None,
-                                expand: str = None,
-                                login: str = None):
+async def get_all_tasks(queue: str,
+                        keys: str | list[str] = None,
+                        filter: dict = None,
+                        query: str = None,
+                        order: str = None,
+                        expand: str = None,
+                        login: str = None):
 
     page_number = 1
 
@@ -381,6 +382,7 @@ async def add_task(task_id_gandiva,
     # Check if the task is already in the database
     task_in_db = db.find_task_by_gandiva_id(DB_SESSION, task_id_gandiva=task_id_gandiva)
     if task_in_db:
+        logging.info(f"Task {task_id_gandiva} already exists in Tracker.")
         return task_in_db
 
     # Construct the task summary
@@ -421,7 +423,7 @@ async def add_task(task_id_gandiva,
             new_task = db.Task(task_id_yandex=task_id_yandex, task_id_gandiva=task_id_gandiva)
             DB_SESSION.add(new_task)
             DB_SESSION.commit()
-            logging.info(f"Task {task_id_yandex} added to the database.")
+            logging.info(f"Task {task_id_yandex} added to Tracker and database.")
             return response_json
         else:
             logging.error(f"Failed to retrieve task key from response for task {task_id_gandiva}")
@@ -430,19 +432,12 @@ async def add_task(task_id_gandiva,
         logging.error(f"Failed to add task {task_id_gandiva}")
         return None
 
-async def add_or_edit_tasks(tasks_gandiva, queue):
+async def add_tasks(tasks_gandiva, queue):
     """
-    Adds tasks from Gandiva to Yandex Tracker if they do not already exist in Yandex Tracker.
-
-    :param tasks_gandiva: List of tasks from Gandiva
-    :param queue: The queue to which tasks should be added
+    Adds tasks from Gandiva to Yandex Tracker if they do not already exist.
     """
-    # Create a new aiohttp session
-
     for task in tasks_gandiva:
         gandiva_task_id = str(task['Id'])
-
-        # Extract and format task details
         initiator_name = f"{task['Initiator']['FirstName']} {task['Initiator']['LastName']}"
         description_html = task['Description']
         description = utils.html_to_yandex_format(description_html)  # Assuming a helper function to extract text from HTML
@@ -451,41 +446,59 @@ async def add_or_edit_tasks(tasks_gandiva, queue):
         initiator_id = task['Initiator']['Id']
         initiator_department = await gandiva_api.get_department_by_user_id(user_id=initiator_id)
 
-        # Add the task to Yandex Tracker
-        response = await add_task(gandiva_task_id, initiator_name,
-                                    initiator_department=initiator_department,
-                                    description=description,
-                                    queue=queue,
-                                    assignee_yandex_id=assignee_id_yandex,
-                                    task_type=task_type)
-        # if a task is in db already, edit it:
-        if isinstance(response, db.Task):
-            # by default all edit fields are none, and only if yandex tracker's field is empty, change it to not none
-            task_id_yandex = response.task_id_yandex
 
+
+        await add_task(gandiva_task_id, initiator_name,
+                       initiator_department=initiator_department,
+                       description=description,
+                       queue=queue,
+                       assignee_yandex_id=assignee_id_yandex,
+                       task_type=task_type)
+
+async def edit_tasks(tasks_gandiva, ya_tasks):
+    """
+    Edits tasks in Yandex Tracker based on the data from Gandiva.
+    Only updates tasks that are outdated.
+    """
+    for task in tasks_gandiva:
+        gandiva_task_id = str(task['Id'])
+        initiator_name = f"{task['Initiator']['FirstName']} {task['Initiator']['LastName']}"
+        description_html = task['Description']
+        description = utils.html_to_yandex_format(description_html)
+        initiator_id = task['Initiator']['Id']
+        initiator_department = await gandiva_api.get_department_by_user_id(user_id=initiator_id)
+
+        # Find the corresponding Yandex task
+        task_yandex = next((yt for yt in ya_tasks if yt['unique'] == gandiva_task_id), None)
+
+        if task_yandex:
+            # Determine which fields need to be updated
             edit_initiator_name = None
             edit_initiator_department = None
-            edit = None
+            edit_description = None
+            task_id_yandex = task_yandex.get('key')
 
-            task_yandex = await get_task(task_id_yandex)
             if initiator_name and not task_yandex.get(YANDEX_FIELD_ID_INITIATOR):
                 edit_initiator_name = initiator_name
-            if not task_yandex.get(YANDEX_FIELD_ID_GANDIVA):
-                edit = True
             if initiator_department and not task_yandex.get(YANDEX_FIELD_ID_INITIATOR_DEPARTMENT):
                 edit_initiator_department = initiator_department
-            if edit_initiator_name or edit or edit_initiator_department:
-                await edit_task(task_id_yandex=task_id_yandex,
-                                initiator_name=edit_initiator_name,
-                                initiator_department=edit_initiator_department)
-            else:
-                logging.info(f"Task {gandiva_task_id} is already up-to-date.")
+            if description and not task_yandex.get('description'):
+                edit_description = description
             # TODO: add analyst and assignee later
             # if not task_yandex['66d379ee99b2de14092e0185--Analyst']:
             #     edit_analyst = (???)
             # if not task_yandex['assignee'] and assignee_id_yandex:
             #     edit_assignee_id_yandex = assignee_id_yandex
-                
+
+            # If any field needs to be edited, call the edit function
+            if edit_initiator_name or edit_initiator_department or edit_description:
+                await edit_task(task_id_yandex=task_id_yandex,
+                                initiator_name=edit_initiator_name,
+                                initiator_department=edit_initiator_department,
+                                description=edit_description)
+            else:
+                logging.info(f"Task {gandiva_task_id} is already up-to-date.")
+
 
 async def edit_task(task_id_yandex,
                     summary=None,
@@ -681,10 +694,103 @@ async def get_sprints_on_board(board_id: str) -> dict:
     url = f"{HOST}/v2/boards/{board_id}/sprints"
     return await make_http_request('GET', url, headers=HEADERS)
 
-async def get_comments(yandex_task_id: str) -> dict:
-    """Returns sprints (as a dictionary) for the given board."""
-    url = f"{HOST}/v2/issues/{yandex_task_id}/comments"
-    return await make_http_request('GET', url, headers=HEADERS)
+async def create_sprint(board_id: str, name: str, start_date: str, end_date: str):
+    """Creates sprint for the given board.
+    date_format: YYYY-MM-DD"""
+    url = f"{HOST}/v2/sprints"
+    body = {
+  "name": name,
+  "board": 
+    {
+      "id": board_id
+    },
+  "startDate": start_date,
+  "endDate": end_date
+}
+    body_json = json.dumps(body)
+    return await make_http_request('POST', url, headers=HEADERS, body=body_json)
+
+async def create_weekly_release_sprint(board_id: int):
+    """Creates a sprint starting on Thursday and ending on the next Thursday with the name 'Релиз [End Date]'.
+       Skips creating if a sprint for the same period already exists."""
+    
+    # Get the current date and find the next Thursday
+    today = datetime.date.today()
+    next_thursday = today + datetime.timedelta((3 - today.weekday()) % 7)
+
+    # Start date is the upcoming Thursday
+    start_date = next_thursday
+    
+    # End date is the next Thursday (7 days sprint period)
+    end_date = start_date + datetime.timedelta(days=8)
+    
+    # Extract day and month for formatting
+    day = end_date.day
+    month = utils.MONTHS_RUSSIAN[end_date.month]
+
+    # Format the name as 'Релиз [End Date in Russian]'
+    sprint_name = f"Релиз {day} {month}"
+    
+    # Get all sprints for the board
+    existing_sprints = await get_sprints_on_board(board_id)
+    
+    # Check if a sprint with the same date range or name already exists
+    for sprint in existing_sprints:
+        sprint_start = datetime.date.fromisoformat(sprint['startDate'])
+        sprint_end = datetime.date.fromisoformat(sprint['endDate'])
+        if sprint_start == start_date and sprint_end == end_date and sprint['name'] == sprint_name:
+            logging.info(f"Sprint '{sprint_name}' already exists for this week. Skipping creation.")
+            return sprint
+
+    # Call the API to create the sprint since it doesn't exist
+    return await create_sprint(board_id, sprint_name, start_date.isoformat(), end_date.isoformat())
+
+async def get_page_of_comments(yandex_task_id: str, per_page: int = 500, after_id: str = None) -> tuple:
+    """
+    Fetches comments for the given Yandex task with pagination support.
+    
+    :param yandex_task_id: ID of the Yandex task
+    :param per_page: Number of comments to fetch per page (default is 500)
+    :param after_id: The ID of the last comment from the previous page (if any)
+    :return: A tuple of (comments, next_page_url)
+    """
+    url = f"{HOST}/v2/issues/{yandex_task_id}/comments?perPage={per_page}"
+    if after_id:
+        url += f"&id={after_id}"
+    
+    response = await make_http_request('GET', url, headers=HEADERS)
+
+    comments = response
+    return comments
+
+async def get_all_comments(yandex_task_id: str, per_page: int = 500) -> list:
+    """
+    Retrieves all comments for the given Yandex task, handling pagination.
+    
+    :param yandex_task_id: ID of the Yandex task
+    :param per_page: Number of comments to fetch per page (default is 500)
+    :return: A list of all comments
+    """
+    all_comments = []
+    after_id = None
+
+    while True:
+        comments = await get_page_of_comments(yandex_task_id, per_page=per_page, after_id=after_id)
+        all_comments.extend(comments)
+
+        if len(comments) < per_page:
+            break
+        # Extract the last comment's ID to fetch the next page
+        after_id = None
+        if comments:
+            after_id = comments[-1]['id']
+
+        # If no next page is found, break out of the loop
+        if not after_id:
+            break
+
+
+    return all_comments
 
 async def add_comment(yandex_task_id: str, comment: str, g_comment_id: str = None, author_name: str = None):
     url = f"{HOST}/v2/issues/{yandex_task_id}/comments"
@@ -714,10 +820,8 @@ async def add_comment(yandex_task_id: str, comment: str, g_comment_id: str = Non
 import time # using for timing functions
 async def main():
     # await refresh_access_token(YA_REFRESH_TOKEN)
-    start_time = time.time()
-
-
-    print("--- %s seconds ---" % (time.time() - start_time))
+    res = await create_weekly_release_sprint(52)
+    res1 = await get_sprints_on_board(52)
     pass
 
 

@@ -242,10 +242,10 @@ async def get_task_comments(task_id):
     )
 
     if response_json:
-        logging.info(f"Comments for task {task_id} fetched successfully.")
+        logging.info(f"Found {len(response_json)} comments for task {task_id}.")
         return response_json
     elif response_json == []:
-        logging.info(f"Comments for task {task_id} fetched successfully (0 comments).")
+        logging.info(f"Found {len(response_json)} comments for task {task_id}.")
         return []
     else:
         logging.error(f"Failed to fetch comments for task {task_id}")
@@ -307,17 +307,6 @@ async def main():
 
     await get_access_token(GAND_LOGIN, GAND_PASSWORD)
 
-        # response = await get_page_of_tasks_by_filter(page_number=1, session=session)
-        # res = await get_department_by_user_id(session=session, user_id=138)
-
-
-    start_time = time.time()
-    # await get_all_tasks_by_filter()
-    task_ids = [852, 853, 4382]
-    tasks_comments = await get_comments_for_tasks(task_ids)
-    
-
-    print("--- %s seconds ---" % (time.time() - start_time))
 
 if __name__ == '__main__':
     # get_access_token(GAND_LOGIN, GAND_PASSWORD)

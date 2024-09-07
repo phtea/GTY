@@ -1,6 +1,8 @@
 import csv
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, MarkupResemblesLocatorWarning
 import re
+import warnings
+warnings.filterwarnings("ignore", category=MarkupResemblesLocatorWarning)
 
 GANDIVA_HOST = "https://gandiva.s-stroy.ru"
 
@@ -181,8 +183,23 @@ def html_to_yandex_format(html):
     # Final text extraction
     return soup.get_text().strip()
 
+# Manual mapping of month names in Russian
+MONTHS_RUSSIAN = {
+    1: "января",
+    2: "февраля",
+    3: "марта",
+    4: "апреля",
+    5: "мая",
+    6: "июня",
+    7: "июля",
+    8: "августа",
+    9: "сентября",
+    10: "октября",
+    11: "ноября",
+    12: "декабря"
+}
+
 if __name__ == '__main__':
     html_comment = '<p>Доработка выполнена в базе Srvr=&quot;192.168.50.226&quot;;Ref=&quot;erp_106&quot;.<br />Техническое описание изменений:<br />1. Расширение САКСЭС<br />1.1. Документ.ЗаказКлиента.ФормаДокумента(2603, 3) - В процедуру &quot;СК_РассчитатьДоставку&quot; добавлены изменения<br />1.2. Документ.ЗаказКлиента.ФормаДокумента(11055, 1) - Добавлена новая процедура &quot;СК_ЗаписьДокументаБезЕгоПроведения&quot;<br />1.3. Документ.ЗаказКлиента.МодульОбъекта(205, 3) - Закомментирован вызов процедуры &quot;СК_ПроверитьЗаполнениеСегментаПартнера&quot;<br />1.4. Документ.ЗаказКлиента.МодульОбъекта(822, 1) - Добавлен вызов процедуры &quot;СК_ПроверитьЗаполнениеСегментаПартнера&quot;</p>'
     html_comment = '<p><a href=\"/Resources/Attachment/22893ba9-efc9-4971-8471-0cd137f13ad7\">[ Файл: 110634 Разбор ФТ.docx]</a></p><p><a href=\"/Resources/Attachment/f56d10c1-6941-4224-86b7-8a404d0fc058\">[ Файл: 110634 ТЗ Запись нового заказа клиента перед расчетом доставки калькулятором.docx]</a></p>'
     comment = html_to_yandex_format(html_comment)
-    print(comment)
