@@ -19,10 +19,32 @@ GAND_PASSWORD       = os.environ.get("GAND_PASSWORD")
 GAND_LOGIN          = os.environ.get("GAND_LOGIN")
 GAND_PROGRAMMER_ID  = 777799898898
 
+from functools import wraps
+
+# Define the retry decorator
+def retry_async(max_retries=3, cooldown=5, exceptions=(Exception,)):
+    """Decorator to retry an asynchronous function after failures with a cooldown."""
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            for attempt in range(1, max_retries + 1):
+                try:
+                    # Try to execute the function
+                    return await func(*args, **kwargs)
+                except exceptions as e:
+                    logging.error(f"Attempt {attempt} failed with error: {e}")
+
+                    if attempt < max_retries:
+                        logging.info(f"Retrying in {cooldown} seconds... (Attempt {attempt} of {max_retries})")
+                        await asyncio.sleep(cooldown)
+                    else:
+                        logging.error("Max retries reached. Giving up.")
+                        raise  # Reraise the exception after max retries
+        return wrapper
+    return decorator
+
 # Dictionary for caching user departments
 user_department_cache = {}
-
-# TODO: before each request add token regeneration if token expired
 
 # Handle not enough data in .env
 if not (GAND_PASSWORD and GAND_LOGIN):
@@ -151,7 +173,7 @@ async def get_task_by_id(request_id):
 async def get_department_by_user_id(user_id):
     """Fetch department by user ID with caching."""
     if user_id in user_department_cache:
-        logging.info(f"Returning cached department for user {user_id}")
+        logging.debug(f"Returning cached department for user {user_id}")
         return user_department_cache[user_id]
 
     url = f"{HOST}/api/Users/{user_id}"
@@ -162,7 +184,7 @@ async def get_department_by_user_id(user_id):
     if response_json:
         department = response_json.get("Department")
         user_department_cache[user_id] = department  # Cache the department
-        logging.info(f"Successfully gathered department for user {user_id}")
+        logging.debug(f"Successfully gathered department for user {user_id}")
         return department
 
     logging.error(f"Error fetching department for user {user_id}")
@@ -207,6 +229,7 @@ async def get_page_of_tasks(page_number):
         return None
 
 # Define the function to get comments for a specific task
+@retry_async(max_retries=3, cooldown=5)
 async def get_task_comments(task_id):
     """Fetch comments for a specific task."""
 
@@ -222,7 +245,7 @@ async def get_task_comments(task_id):
         logging.info(f"Comments for task {task_id} fetched successfully.")
         return response_json
     elif response_json == []:
-        logging.info(f"There are no comments for task {task_id}.")
+        logging.info(f"Comments for task {task_id} fetched successfully (0 comments).")
         return []
     else:
         logging.error(f"Failed to fetch comments for task {task_id}")

@@ -1,4 +1,3 @@
-import yandex_api, gandiva_api
 import csv
 from bs4 import BeautifulSoup
 import re
@@ -26,7 +25,7 @@ def filter_and_group_tasks_by_new_status(gandiva_tasks: list, yandex_tasks: list
         y_status = y_task.get('status').get('key')
 
         # Step 4: Convert statuses using helper functions
-        current_g_status = yandex_api.get_transition_from_gandiva_status(g_status)[:-4]
+        current_g_status = get_transition_from_gandiva_status(g_status)[:-4]
         current_g_status_step = get_ya_status_step(current_g_status)
         current_ya_status_step = get_ya_status_step(y_status)
 
@@ -138,7 +137,7 @@ def save_list_to_csv(data_list, filename):
         for item in data_list:
             writer.writerow([item])  # Write each item in a new row
 
-def html_to_yandex_comment(html):
+def html_to_yandex_format(html):
     """
     Converts HTML content to plain text, handling newlines for <br> and block-level elements.
     Processes links to the format [filename](url), 
@@ -185,5 +184,5 @@ def html_to_yandex_comment(html):
 if __name__ == '__main__':
     html_comment = '<p>Доработка выполнена в базе Srvr=&quot;192.168.50.226&quot;;Ref=&quot;erp_106&quot;.<br />Техническое описание изменений:<br />1. Расширение САКСЭС<br />1.1. Документ.ЗаказКлиента.ФормаДокумента(2603, 3) - В процедуру &quot;СК_РассчитатьДоставку&quot; добавлены изменения<br />1.2. Документ.ЗаказКлиента.ФормаДокумента(11055, 1) - Добавлена новая процедура &quot;СК_ЗаписьДокументаБезЕгоПроведения&quot;<br />1.3. Документ.ЗаказКлиента.МодульОбъекта(205, 3) - Закомментирован вызов процедуры &quot;СК_ПроверитьЗаполнениеСегментаПартнера&quot;<br />1.4. Документ.ЗаказКлиента.МодульОбъекта(822, 1) - Добавлен вызов процедуры &quot;СК_ПроверитьЗаполнениеСегментаПартнера&quot;</p>'
     html_comment = '<p><a href=\"/Resources/Attachment/22893ba9-efc9-4971-8471-0cd137f13ad7\">[ Файл: 110634 Разбор ФТ.docx]</a></p><p><a href=\"/Resources/Attachment/f56d10c1-6941-4224-86b7-8a404d0fc058\">[ Файл: 110634 ТЗ Запись нового заказа клиента перед расчетом доставки калькулятором.docx]</a></p>'
-    comment = html_to_yandex_comment(html_comment)
+    comment = html_to_yandex_format(html_comment)
     print(comment)

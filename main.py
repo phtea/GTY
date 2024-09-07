@@ -11,6 +11,7 @@ import db_module as db
 import utils
 
 import aiohttp
+import re
 
 # Load environment variables
 from dotenv import load_dotenv
@@ -91,29 +92,44 @@ async def move_tasks_to_new_status_bulk(g_tasks, ya_tasks):
     await yandex_api.move_groups_tasks_status(grouped_ya_tasks)
 
 async def sync_gandiva_comments(g_tasks, sync_mode: int):
-    """Synchronizes comments between services.
+    """
+    Synchronizes comments between services.
     sync_mode can be 1 or 2:
     1 - sync all comments
-    2 - sync only comments for programmers"""
+    2 - sync only comments for programmers
+    """
     g_tasks_ids = utils.extract_task_ids(g_tasks)
-    # TODO: ONLY FOR NOW!! [:10]
-    tasks_comments = await gandiva_api.get_comments_for_tasks(g_tasks_ids[:10])
+    tasks_comments = await gandiva_api.get_comments_for_tasks(g_tasks_ids)
     
     for task_id, comments in tasks_comments.items():
         yandex_task = db.find_task_by_gandiva_id(session=DB_SESSION, task_id_gandiva=task_id)
         yandex_task_id = yandex_task.task_id_yandex
-        
+        yandex_comments = await yandex_api.get_comments(yandex_task_id=yandex_task_id)
+
+        # Extract g_comment_ids from yandex_comments
+        existing_g_comment_ids = set()
+        for y_comment in yandex_comments:
+            text = y_comment.get('text', '')
+            # Check if the comment contains a g_comment_id in the format [g_comment_id]
+            match = re.match(r'\[(\d+)\]', text)
+            if match:
+                existing_g_comment_ids.add(match.group(1))  # Extract the g_comment_id
+
         for comment in comments:
             # Extract required fields
-            g_comment_id = comment['Id']
+            g_comment_id = str(comment['Id'])  # Ensure g_comment_id is a string
             text_html = comment['Text']
-            text = utils.html_to_yandex_comment(text_html)
+            text = utils.html_to_yandex_format(text_html)
             author = comment['Author']
             author_name = f"{author['FirstName']} {author['LastName']}"
             addressees = comment.get('Addressees', [])
 
+            # Check if this g_comment_id already exists in Yandex comments
+            if g_comment_id in existing_g_comment_ids:
+                continue  # Skip adding if the comment already exists
+
+            # Handle sync_mode 2 (only sync comments for programmers)
             if sync_mode == 2:
-                # Send only if one of the addressees is GANDIVA_PROGRAMMER_ID
                 send_comment = False
                 for addressee in addressees:
                     if addressee['User']['Id'] == gandiva_api.GAND_PROGRAMMER_ID:
@@ -121,32 +137,33 @@ async def sync_gandiva_comments(g_tasks, sync_mode: int):
                         break
                 if not send_comment:
                     continue  # Skip comment if the programmer is not found
-            
-            # Send the comment if sync_mode is not 2 or if GANDIVA_PROGRAMMER_ID is found
-            await yandex_api.add_comment(yandex_task_id=yandex_task_id, comment=text, g_comment_id=str(g_comment_id), author_name=author_name)
+
+            # Send the comment to Yandex if sync_mode is not 2 or if GANDIVA_PROGRAMMER_ID is found
+            await yandex_api.add_comment(
+                yandex_task_id=yandex_task_id,
+                comment=text,
+                g_comment_id=g_comment_id,
+                author_name=author_name
+            )
 
 async def sync_services():
+    # sync_mode: 1 - all comments, 2 - only for programmers
+    sync_mode = 1
+    queue = "TEA"
+
     await yandex_api.check_access_token(yandex_api.YA_ACCESS_TOKEN)
     await gandiva_api.get_access_token(gandiva_api.GAND_LOGIN, gandiva_api.GAND_PASSWORD)
     g_tasks = await gandiva_api.get_all_tasks()
-    await yandex_api.add_or_edit_tasks(g_tasks, "TEA")
+    await yandex_api.add_or_edit_tasks(g_tasks, queue=queue)
     ya_tasks = await yandex_api.get_all_tasks()
     await move_tasks_to_new_status_bulk(g_tasks, ya_tasks)
-    g_tasks_ids = utils.extract_task_ids(g_tasks)
+    await sync_gandiva_comments(g_tasks, sync_mode)
 
 # Main function to start the bot
 async def main():
-    # await sync_services()
-    await gandiva_api.get_access_token(gandiva_api.GAND_LOGIN, gandiva_api.GAND_PASSWORD)
-    g_tasks = await gandiva_api.get_all_tasks()
-    
-    await sync_gandiva_comments(g_tasks, 1)
-
-
-
-
-
-    return    
+    await sync_services()
+    # 16:02 - 16:09
+    return
     await bot.polling()
 
 

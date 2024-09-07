@@ -369,8 +369,8 @@ async def get_task(yandex_task_id: str) -> dict:
 
 async def add_task(task_id_gandiva,
                    initiator_name,
+                   queue,
                    description="Без описания",
-                   queue="TEA",
                    assignee_yandex_id=None,
                    task_type=None,
                    initiator_department=None):
@@ -430,7 +430,7 @@ async def add_task(task_id_gandiva,
         logging.error(f"Failed to add task {task_id_gandiva}")
         return None
 
-async def add_or_edit_tasks(tasks_gandiva, queue="TEA"):
+async def add_or_edit_tasks(tasks_gandiva, queue):
     """
     Adds tasks from Gandiva to Yandex Tracker if they do not already exist in Yandex Tracker.
 
@@ -445,10 +445,9 @@ async def add_or_edit_tasks(tasks_gandiva, queue="TEA"):
         # Extract and format task details
         initiator_name = f"{task['Initiator']['FirstName']} {task['Initiator']['LastName']}"
         description_html = task['Description']
-        description = utils.extract_text_from_html(description_html)  # Assuming a helper function to extract text from HTML
+        description = utils.html_to_yandex_format(description_html)  # Assuming a helper function to extract text from HTML
         assignee_id_yandex = ""
         task_type = "improvement"
-        # TODO: get initiator's department from db??
         initiator_id = task['Initiator']['Id']
         initiator_department = await gandiva_api.get_department_by_user_id(user_id=initiator_id)
 
@@ -530,7 +529,13 @@ async def edit_task(task_id_yandex,
     url = f"{HOST}/v2/issues/{task_id_yandex}"
 
     # Use the helper function to make the PATCH request
-    return await make_http_request('PATCH', url, headers=HEADERS, body=body_json)
+    response = await make_http_request('PATCH', url, headers=HEADERS, body=body_json)
+    if response:
+        logging.info(f"Successfully edited task {task_id_yandex}")
+        return response
+    else:
+        logging.error(f"Failed editing task {task_id_yandex}")
+        return None
 
 async def move_task_status(
     task_id_yandex,
@@ -676,6 +681,11 @@ async def get_sprints_on_board(board_id: str) -> dict:
     url = f"{HOST}/v2/boards/{board_id}/sprints"
     return await make_http_request('GET', url, headers=HEADERS)
 
+async def get_comments(yandex_task_id: str) -> dict:
+    """Returns sprints (as a dictionary) for the given board."""
+    url = f"{HOST}/v2/issues/{yandex_task_id}/comments"
+    return await make_http_request('GET', url, headers=HEADERS)
+
 async def add_comment(yandex_task_id: str, comment: str, g_comment_id: str = None, author_name: str = None):
     url = f"{HOST}/v2/issues/{yandex_task_id}/comments"
     
@@ -707,8 +717,6 @@ async def main():
     start_time = time.time()
 
 
-    res = await add_comment(yandex_task_id='TEA-2348', comment=comment, g_comment_id='123123', author_name='Анонимный Автор')
-    print(res)
     print("--- %s seconds ---" % (time.time() - start_time))
     pass
 
