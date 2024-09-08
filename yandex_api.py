@@ -9,6 +9,7 @@ import gandiva_api
 import datetime
 
 import utils
+from utils import make_http_request
 
 GANDIVA_TASK_URL = "https://gandiva.s-stroy.ru/Request/Edit/"
 
@@ -56,14 +57,13 @@ HEADERS = {
 }
 
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-
 # Authorization block
 
 async def refresh_access_token(refresh_token=None) -> dict:
-    """ Refresh access_token using refresh_token,
-        update global variables and
-        save changes to .env file
+    """
+    Refresh access_token using refresh_token,
+    update global variables and
+    save changes to .env file.
     """
     global YA_REFRESH_TOKEN
     if refresh_token is None:
@@ -75,41 +75,38 @@ async def refresh_access_token(refresh_token=None) -> dict:
         "client_id": YA_CLIENT_ID,
         "client_secret": YA_CLIENT_SECRET
     }
-    
+
     # URL encode the payload
     payload_url_encoded = urllib.parse.urlencode(payload)
-    
+
     headers = {
         'Content-Type': 'application/x-www-form-urlencoded',
     }
 
-    # Create a new ClientSession for the request
-    async with aiohttp.ClientSession() as session:
-        async with session.post(YA_OAUTH_TOKEN_URL, headers=headers, data=payload_url_encoded) as response:
-            if response.status != 200:
-                logging.error(f"Статус ошибки ответа запроса: {response.status}")
-                return None
+    # Use make_http_request to send the POST request
+    response_json = await make_http_request("POST", YA_OAUTH_TOKEN_URL, headers=headers, body=payload_url_encoded)
 
-            logging.info(f"yandex refresh code response: {await response.text()}")
-            device_creds = await response.json()
+    if response_json:
+        access_token = response_json.get('access_token')
+        refresh_token = response_json.get('refresh_token')
 
-            access_token = device_creds['access_token']
-            refresh_token = device_creds['refresh_token']
+        global YA_ACCESS_TOKEN
+        YA_ACCESS_TOKEN = access_token
+        os.environ["YA_ACCESS_TOKEN"] = access_token
+        dotenv.set_key(DOTENV_PATH, "YA_ACCESS_TOKEN", access_token)
 
-            global YA_ACCESS_TOKEN
-            YA_ACCESS_TOKEN = access_token
-            os.environ["YA_ACCESS_TOKEN"] = access_token
-            dotenv.set_key(DOTENV_PATH, "YA_ACCESS_TOKEN", os.environ["YA_ACCESS_TOKEN"])
+        YA_REFRESH_TOKEN = refresh_token
+        os.environ["YA_REFRESH_TOKEN"] = refresh_token
+        dotenv.set_key(DOTENV_PATH, "YA_REFRESH_TOKEN", refresh_token)
 
-            YA_REFRESH_TOKEN = refresh_token
-            os.environ["YA_REFRESH_TOKEN"] = refresh_token
-            dotenv.set_key(DOTENV_PATH, "YA_REFRESH_TOKEN", os.environ["YA_REFRESH_TOKEN"])
-
-            return access_token
+        return access_token
+    else:
+        logging.error("Failed to refresh access token.")
+        return None
 
 async def check_access_token(access_token) -> str:
-    """Recursive way to check if access token works.
-    
+    """
+    Recursive way to check if access token works.
     Returns only when login was successful (+ refresh the token).
     """
     # Get account info using the provided access token
@@ -118,7 +115,7 @@ async def check_access_token(access_token) -> str:
     # Check if the response is successful
     if response.status_code == 200:
         user_info = response.json()  # Parse the JSON response
-        logging.info("Authorized to user " + user_info['login'] + "! [Yandex Tracker]")
+        logging.info(f"Authorized user: {user_info['login']} [Yandex Tracker]")
         return
 
     # If the response is not successful, refresh the access token
@@ -129,75 +126,42 @@ async def check_access_token(access_token) -> str:
 
 async def get_access_token_captcha() -> str:
     """
-    Asynchronously retrieves the Yandex access token using manual captcha input.
-
-    This function prompts the user to enter a captcha code obtained from the Yandex OAuth authorization 
-    endpoint. It sends a POST request to the Yandex OAuth token URL with the provided captcha code 
-    and other necessary credentials to retrieve an access token.
-
-    Returns:
-    - str: The Yandex access token if successfully retrieved.
-
-    Raises:
-    - ValueError: If the captcha code is invalid and the access token cannot be obtained.
-
-    Notes:
-    - The user must manually obtain the captcha code by visiting the Yandex authorization URL:
-      `https://oauth.yandex.ru/authorize?response_type=code&client_id={YA_CLIENT_ID}`.
-    - The function will keep prompting for the captcha code until a valid access token is returned.
-    - Logging is used to record the status of the HTTP response and the response text for debugging purposes.
+    Retrieves the Yandex access token via manual captcha input by sending a POST request to the Yandex OAuth token URL.
+    Prompts the user for the captcha code until a valid access token is obtained.
     """
 
     # Handling code retrieved manually from Yandex
     yandex_id_metadata = {}
 
-    async with aiohttp.ClientSession() as session:
-        while not yandex_id_metadata.get("access_token"):
-            yandex_captcha_code = input(f"Code (get from https://oauth.yandex.ru/authorize?response_type=code&client_id={YA_CLIENT_ID}): ")
-            async with session.post(YA_OAUTH_TOKEN_URL, data={
-                "grant_type": "authorization_code",
-                "code": yandex_captcha_code,
-                "client_id": YA_CLIENT_ID,
-                "client_secret": YA_CLIENT_SECRET,
-            }) as yandex_captcha_response:
-                
-                logging.info(f"Yandex captcha code: {yandex_captcha_response.status}")
-                response_text = await yandex_captcha_response.text()
-                logging.info(f"Yandex captcha response: {response_text}")
+    while not yandex_id_metadata.get("access_token"):
+        yandex_captcha_code = input(f"Code (get from https://oauth.yandex.ru/authorize?response_type=code&client_id={YA_CLIENT_ID}): ")
+        
+        # Prepare the payload for the request
+        payload = {
+            "grant_type": "authorization_code",
+            "code": yandex_captcha_code,
+            "client_id": YA_CLIENT_ID,
+            "client_secret": YA_CLIENT_SECRET,
+        }
 
-                yandex_id_metadata = json.loads(response_text)
+        # Use make_http_request to send the POST request
+        response_json = await make_http_request("POST", YA_OAUTH_TOKEN_URL, body=payload)
+
+        if response_json:
+            yandex_id_metadata = response_json
+            logging.info("Successfully retrieved access token.")
+        else:
+            logging.error("Failed to retrieve access token. Please try again.")
 
     yandex_access_token = yandex_id_metadata.get("access_token")
     return yandex_access_token
 
-# Common helper function for HTTP requests
-async def make_http_request(method, url, headers=None, body=None):
-    """Generalized function to handle HTTP GET/POST requests."""
-
-    valid_methods = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']
-    if method.upper() not in valid_methods:
-        logging.error(f"Invalid HTTP method: {method}")
-        return None
-    
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.request(method, url, headers=headers, data=body) as response:
-                status_code = response.status
-                response_text = await response.text()  # For logging purposes
-                
-                if status_code in [200, 201]:
-                    return await response.json()  # Return the JSON response
-                else:
-                    logging.error(f"Request to {url} failed with status {status_code}: {response_text}")
-                    return None
-    except Exception as e:
-        logging.error(f"Exception during request to {url}: {str(e)}")
-        return None
-
 # Functions
 
 def get_account_info(access_token) -> requests.Response:
-    """Gets Yandex account info by providing the access_token."""
+    """
+    Gets Yandex account info by providing the access_token.
+    """
     # Prepare the request parameters
     data = {
         "oauth_token": access_token,
@@ -382,7 +346,6 @@ async def add_task(task_id_gandiva,
     # Check if the task is already in the database
     task_in_db = db.find_task_by_gandiva_id(DB_SESSION, task_id_gandiva=task_id_gandiva)
     if task_in_db:
-        logging.info(f"Task {task_id_gandiva} already exists in Tracker.")
         return task_in_db
 
     # Construct the task summary
@@ -436,6 +399,11 @@ async def add_tasks(tasks_gandiva, queue):
     """
     Adds tasks from Gandiva to Yandex Tracker if they do not already exist.
     """
+    logging.info("Adding tasks...")
+
+    # Initialize a counter for added tasks
+    added_task_count = 0
+
     for task in tasks_gandiva:
         gandiva_task_id = str(task['Id'])
         initiator_name = f"{task['Initiator']['FirstName']} {task['Initiator']['LastName']}"
@@ -446,20 +414,36 @@ async def add_tasks(tasks_gandiva, queue):
         initiator_id = task['Initiator']['Id']
         initiator_department = await gandiva_api.get_department_by_user_id(user_id=initiator_id)
 
+        # Call add_task and check if a task was successfully added
+        result = await add_task(gandiva_task_id, initiator_name,
+                                initiator_department=initiator_department,
+                                description=description,
+                                queue=queue,
+                                assignee_yandex_id=assignee_id_yandex,
+                                task_type=task_type)
 
+        # Check if the result indicates the task was added (assuming it returns a dict on success)
+        if isinstance(result, dict):
+            added_task_count += 1
+        else:
+            logging.debug(f"Task {gandiva_task_id} could not be added or already exists.")
 
-        await add_task(gandiva_task_id, initiator_name,
-                       initiator_department=initiator_department,
-                       description=description,
-                       queue=queue,
-                       assignee_yandex_id=assignee_id_yandex,
-                       task_type=task_type)
+    # Log the total number of added tasks
+    logging.info(f"Total tasks added: {added_task_count}")
 
 async def edit_tasks(tasks_gandiva, ya_tasks):
     """
     Edits tasks in Yandex Tracker based on the data from Gandiva.
     Only updates tasks that are outdated.
     """
+    logging.info(f"Editing tasks...")
+    
+    # Create a dictionary to map Yandex task unique IDs to their corresponding task objects
+    ya_tasks_dict = {yt['unique']: yt for yt in ya_tasks if yt.get('unique')}
+    
+    # Initialize a counter for edited tasks
+    edited_task_count = 0
+
     for task in tasks_gandiva:
         gandiva_task_id = str(task['Id'])
         initiator_name = f"{task['Initiator']['FirstName']} {task['Initiator']['LastName']}"
@@ -468,8 +452,8 @@ async def edit_tasks(tasks_gandiva, ya_tasks):
         initiator_id = task['Initiator']['Id']
         initiator_department = await gandiva_api.get_department_by_user_id(user_id=initiator_id)
 
-        # Find the corresponding Yandex task
-        task_yandex = next((yt for yt in ya_tasks if yt['unique'] == gandiva_task_id), None)
+        # Find the corresponding Yandex task using the dictionary
+        task_yandex = ya_tasks_dict.get(gandiva_task_id)
 
         if task_yandex:
             # Determine which fields need to be updated
@@ -484,6 +468,7 @@ async def edit_tasks(tasks_gandiva, ya_tasks):
                 edit_initiator_department = initiator_department
             if description and not task_yandex.get('description'):
                 edit_description = description
+
             # TODO: add analyst and assignee later
             # if not task_yandex['66d379ee99b2de14092e0185--Analyst']:
             #     edit_analyst = (???)
@@ -496,8 +481,13 @@ async def edit_tasks(tasks_gandiva, ya_tasks):
                                 initiator_name=edit_initiator_name,
                                 initiator_department=edit_initiator_department,
                                 description=edit_description)
+                # Increment the counter
+                edited_task_count += 1
             else:
-                logging.info(f"Task {gandiva_task_id} is already up-to-date.")
+                logging.debug(f"Task {gandiva_task_id} is already up-to-date.")
+
+    # Log the total number of edited tasks
+    logging.info(f"Total tasks edited: {edited_task_count}")
 
 
 async def edit_task(task_id_yandex,
@@ -581,43 +571,6 @@ async def move_task_status(
     
     # Use the helper function to make the POST request
     return await make_http_request('POST', url, headers=HEADERS, body=body_json)
-
-async def batch_move_tasks_status_old(gandiva_tasks: list):
-
-    for task in gandiva_tasks:
-        task_id_gandiva = str(task['Id'])
-        gandiva_status = task['Status']
-        transition_id = utils.get_transition_from_gandiva_status(gandiva_status)
-        yandex_status = transition_id[:-4]
-        current_yandex_status = None
-        task_id_yandex = None
-
-        task_in_db = db.find_task_by_gandiva_id(DB_SESSION, task_id_gandiva=task_id_gandiva)
-        if task_in_db:
-            task_id_yandex = task_in_db.task_id_yandex
-            if task_id_yandex is None:
-                logging.warning(f"The task {task_id_gandiva} is in db, but task_id_yandex is empty. (???) I guess it's on gandiva but still not on yandex, that's why")
-                continue
-            task_yandex = await get_tasks_by_gandiva_ids(task_id_gandiva)
-            if task_yandex:
-                current_yandex_status = task_yandex[0]['status']['key']
-            if current_yandex_status == yandex_status:
-                logging.info(f"Task {task_id_yandex} is already in status {yandex_status}")
-                continue
-
-        # If a transition ID is found for the status, move the task status
-        if not transition_id:
-            logging.warning(f"No transition ID found for task {task_id_gandiva} with status code {gandiva_status}")
-            continue
-        if task_id_yandex is None:
-            logging.warning(f"No task ID found for gandiva task {task_id_gandiva}")
-            continue
-        try:
-            await move_task_status(
-                task_id_yandex=task_id_yandex,
-                transition_id=transition_id)
-        except Exception as e:
-            logging.error(f"Exception occurred while processing task {task_id_gandiva}: {str(e)}")
 
 async def move_tasks_status(tasks, new_status):
     """Returns sprints (as a dictionary) for the given board."""
@@ -809,7 +762,7 @@ async def add_comment(yandex_task_id: str, comment: str, g_comment_id: str = Non
     response_json = await make_http_request("POST", url=url, headers=HEADERS, body=body_json)
         # Return the response JSON or None if the request failed
     if response_json:
-        logging.info(f"Comment was succesfully added to task {yandex_task_id}!")
+        logging.debug(f"Comment was succesfully added to task {yandex_task_id}!")
         return response_json
     else:
         logging.error(f"Comment was not added to task {yandex_task_id}.")

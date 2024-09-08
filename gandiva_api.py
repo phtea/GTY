@@ -1,5 +1,4 @@
 import asyncio
-import aiohttp
 import logging
 # String manipulations
 import urllib.parse
@@ -7,6 +6,7 @@ import urllib.parse
 import os
 import dotenv
 import json
+from utils import make_http_request
 
 
 # Load environment variables
@@ -53,8 +53,6 @@ if not (GAND_PASSWORD and GAND_LOGIN):
                      GAND_LOGIN""")
 HOST = "https://api-gandiva.s-stroy.ru"
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-
 # Authorization block
 
 async def get_access_token(username, password):
@@ -75,24 +73,28 @@ async def get_access_token(username, password):
         'Content-Type': 'application/x-www-form-urlencoded',
     }
 
-    async with aiohttp.ClientSession() as session:
-        async with session.post(url, headers=headers, data=body) as response:
-            response_json = await response.json()
-            access_token = response_json.get('access_token')
-            refresh_token = response_json.get('refresh_token')
+    # Use make_http_request to send the POST request
+    response_json = await make_http_request("POST", url, headers=headers, body=body)
 
-            # Update global tokens and environment variables
-            global GAND_ACCESS_TOKEN
-            GAND_ACCESS_TOKEN = access_token
-            os.environ["GAND_ACCESS_TOKEN"] = access_token
-            dotenv.set_key(DOTENV_PATH, "GAND_ACCESS_TOKEN", access_token)
+    if response_json:
+        access_token = response_json.get('access_token')
+        refresh_token = response_json.get('refresh_token')
 
-            global GAND_REFRESH_TOKEN
-            GAND_REFRESH_TOKEN = refresh_token
-            os.environ["GAND_REFRESH_TOKEN"] = refresh_token
-            dotenv.set_key(DOTENV_PATH, "GAND_REFRESH_TOKEN", refresh_token)
+        # Update global tokens and environment variables
+        global GAND_ACCESS_TOKEN
+        GAND_ACCESS_TOKEN = access_token
+        os.environ["GAND_ACCESS_TOKEN"] = access_token
+        dotenv.set_key(DOTENV_PATH, "GAND_ACCESS_TOKEN", access_token)
 
-            return access_token
+        global GAND_REFRESH_TOKEN
+        GAND_REFRESH_TOKEN = refresh_token
+        os.environ["GAND_REFRESH_TOKEN"] = refresh_token
+        dotenv.set_key(DOTENV_PATH, "GAND_REFRESH_TOKEN", refresh_token)
+        logging.info(f"Authorized user: {username} [Gandiva]")
+        return access_token
+    else:
+        logging.error("Failed to retrieve access token.")
+        return None
 
 async def refresh_access_token(refresh_token):
     """Gets and updates access_token + refresh_token
@@ -111,48 +113,29 @@ async def refresh_access_token(refresh_token):
         'Content-Type': 'application/x-www-form-urlencoded',
     }
 
-    async with aiohttp.ClientSession() as session:
-        async with session.post(url, headers=headers, data=body) as response:
-            response_json = await response.json()
-            access_token = response_json.get('access_token')
-            refresh_token = response_json.get('refresh_token')
+    # Use make_http_request to send the POST request
+    response_json = await make_http_request("POST", url, headers=headers, body=body)
 
-            # Update global tokens and environment variables
-            global GAND_ACCESS_TOKEN
-            GAND_ACCESS_TOKEN = access_token
-            os.environ["GAND_ACCESS_TOKEN"] = access_token
-            dotenv.set_key(DOTENV_PATH, "GAND_ACCESS_TOKEN", access_token)
+    if response_json:
+        access_token = response_json.get('access_token')
+        refresh_token = response_json.get('refresh_token')
 
-            global GAND_REFRESH_TOKEN
-            GAND_REFRESH_TOKEN = refresh_token
-            os.environ["GAND_REFRESH_TOKEN"] = refresh_token
-            dotenv.set_key(DOTENV_PATH, "GAND_REFRESH_TOKEN", refresh_token)
-            logging.info('Successfully refreshed Gandiva token')
+        # Update global tokens and environment variables
+        global GAND_ACCESS_TOKEN
+        GAND_ACCESS_TOKEN = access_token
+        os.environ["GAND_ACCESS_TOKEN"] = access_token
+        dotenv.set_key(DOTENV_PATH, "GAND_ACCESS_TOKEN", access_token)
 
-            return access_token
+        global GAND_REFRESH_TOKEN
+        GAND_REFRESH_TOKEN = refresh_token
+        os.environ["GAND_REFRESH_TOKEN"] = refresh_token
+        dotenv.set_key(DOTENV_PATH, "GAND_REFRESH_TOKEN", refresh_token)
 
-# Common helper functions for HTTP requests
-async def make_http_request(method, url, headers=None, body=None):
-    """Generalized function to handle HTTP GET/POST requests."""
+        logging.info('Successfully refreshed Gandiva token')
 
-    valid_methods = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']
-    if method.upper() not in valid_methods:
-        logging.error(f"Invalid HTTP method: {method}")
-        return None
-    
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.request(method, url, headers=headers, data=body) as response:
-                status_code = response.status
-                response_text = await response.text()  # For logging purposes
-                
-                if status_code in [200, 201]:
-                    return await response.json()  # Return the JSON response
-                else:
-                    logging.error(f"Request to {url} failed with status {status_code}: {response_text}")
-                    return None
-    except Exception as e:
-        logging.error(f"Exception during request to {url}: {str(e)}")
+        return access_token
+    else:
+        logging.error("Failed to refresh access token.")
         return None
 
 def get_headers(content_type="application/json"):
@@ -222,7 +205,7 @@ async def get_page_of_tasks(page_number):
     )
 
     if response_json:
-        logging.info(f"Page {page_number} fetched.")
+        logging.debug(f"Page {page_number} fetched.")
         return response_json
     else:
         logging.error(f"Failed to fetch page {page_number}")
@@ -241,36 +224,50 @@ async def get_task_comments(task_id):
         headers=get_headers(content_type="application/json")
     )
 
-    if response_json:
-        logging.info(f"Found {len(response_json)} comments for task {task_id}.")
+    if response_json or response_json == []:
+        logging.debug(f"Found {len(response_json)} comments for task {task_id}.")
         return response_json
-    elif response_json == []:
-        logging.info(f"Found {len(response_json)} comments for task {task_id}.")
-        return []
     else:
         logging.error(f"Failed to fetch comments for task {task_id}")
         return None
 
-# Define the function to get comments for a list of task IDs concurrently
-async def get_comments_for_tasks(task_ids: list[int]):
-    """Fetch comments for a list of tasks."""
+# Define the function to get comments for a list of task IDs with concurrency control
+async def get_comments_for_tasks_concurrently(task_ids: list[int], max_concurrent_requests: int = 5):
+    """Fetch comments for a list of tasks with a limit on concurrent requests."""
     task_comments = {}
+    semaphore = asyncio.Semaphore(max_concurrent_requests)  # Create a semaphore with the desired limit
 
-    tasks = [
-        get_task_comments(task_id)
-        for task_id in task_ids
-    ]
+    async def fetch_comments(task_id):
+        """Fetch comments for a single task ID while respecting the semaphore limit."""
+        async with semaphore:  # Acquire the semaphore
+            comments = await get_task_comments(task_id)
+            return task_id, comments
 
-    # Run all tasks concurrently
+    # Create a list of tasks
+    tasks = [fetch_comments(task_id) for task_id in task_ids]
+
+    # Run all tasks concurrently while respecting the semaphore
     responses = await asyncio.gather(*tasks)
 
     # Collect the comments for each task ID
-    for task_id, comments in zip(task_ids, responses):
+    for task_id, comments in responses:
+        task_comments[task_id] = comments
+
+    return task_comments
+
+# Define the function to get comments for a list of task IDs consecutively
+async def get_comments_for_tasks_consecutively(task_ids: list[int]):
+    """Fetch comments for a list of tasks one at a time."""
+    task_comments = {}
+
+    for task_id in task_ids:
+        comments = await get_task_comments(task_id)
         task_comments[task_id] = comments
 
     return task_comments
 
 async def get_all_tasks():
+    logging.info("Fetching tasks... [Gandiva]")
     all_requests = []
     
     # Fetch the first page to get the total count and number of pages
@@ -283,7 +280,7 @@ async def get_all_tasks():
 
     # Calculate the total number of pages
     total_pages = (total_requests // 100) + 1
-    logging.info(f"Found {total_pages} pages of tasks in Gandiva.")
+    logging.info(f"Found {total_pages} pages of tasks. [Gandiva]")
 
     # Create a list of tasks for all remaining pages
     tasks = [
