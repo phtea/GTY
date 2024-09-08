@@ -5,8 +5,6 @@ from sqlalchemy.exc import NoResultFound
 
 Base = declarative_base()
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-
 # 1. Tasks Table
 class Task(Base):
     __tablename__ = 'tasks'

@@ -1,10 +1,15 @@
 import csv
 from bs4 import BeautifulSoup, MarkupResemblesLocatorWarning
 import re
+import logging
 import warnings
+import aiohttp
 warnings.filterwarnings("ignore", category=MarkupResemblesLocatorWarning)
 
 GANDIVA_HOST = "https://gandiva.s-stroy.ru"
+
+def setup_logging():
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 def filter_and_group_tasks_by_new_status(gandiva_tasks: list, yandex_tasks: list) -> dict:
     """
@@ -182,6 +187,29 @@ def html_to_yandex_format(html):
 
     # Final text extraction
     return soup.get_text().strip()
+
+async def make_http_request(method, url, headers=None, body=None):
+    """Generalized function to handle HTTP GET/POST requests."""
+
+    valid_methods = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']
+    if method.upper() not in valid_methods:
+        logging.error(f"Invalid HTTP method: {method}")
+        return None
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.request(method, url, headers=headers, data=body) as response:
+                status_code = response.status
+                response_text = await response.text()  # For logging purposes
+                
+                if status_code in [200, 201]:
+                    return await response.json()  # Return the JSON response
+                else:
+                    logging.error(f"Request to {url} failed with status {status_code}: {response_text}")
+                    return None
+    except Exception as e:
+        logging.error(f"Exception during request to {url}: {str(e)}")
+        return None
 
 # Manual mapping of month names in Russian
 MONTHS_RUSSIAN = {
