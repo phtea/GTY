@@ -1,17 +1,8 @@
 ## README.md
 
-# TODO
-- добавить модуль пагинации (постраничный вывод) задач
+# GTY (Gandiva To Yandex)
 
-# SuccessYaTrackerTGBot
-
-SuccessYaTrackerTGBot is a Telegram bot designed to interact with Yandex.Tracker, allowing users to fetch and display tasks assigned to them. The bot is built using Python, the Telegram API, Gandiva API, and the Yandex OAuth API for authentication and task management.
-
-## Features
-
-- Users can log in with their Yandex account to check their tasks.
-- The bot fetches tasks from Yandex.Tracker using the user's login credentials.
-- Handles OAuth authentication with Yandex, including access token refresh.
+GTY is a service designed to automate synchronization process between Gandiva and Yandex Tracker services.
 
 ## Requirements
 
@@ -25,8 +16,8 @@ SuccessYaTrackerTGBot is a Telegram bot designed to interact with Yandex.Tracker
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/phtea/SuccessYaTrackerTGBot.git
-cd SuccessYaTrackerTGBot
+git clone https://github.com/phtea/GTY.git
+cd GTY
 ```
 
 ### 2. Create a virtual environment (optional but recommended)
@@ -44,33 +35,47 @@ First, make sure you have `pip` installed. Then, run:
 pip install -r requirements.txt
 ```
 
-### 4. Set up environment variables using `.env`
+### 4. Set up environment variables using `config.ini`
 
-The bot uses the `python-dotenv` package to load environment variables from a `.env` file. This file should contain your sensitive data, such as the Telegram bot token and Yandex OAuth credentials.
+The bot uses config.ini file to load sensitive and settings variables.
 
-#### Create a `.env` file in the root directory of the project:
+#### Create a `config.ini` file in the root directory of the project:
 
 ```bash
-touch .env
+touch config.ini
 ```
 
-#### Add the following variables to your `.env` file:
+#### Add the following variables to your `config.ini` file:
 
-```env
-TG_BOT_TOKEN=your-telegram-bot-token
-YA_X_CLOUD_ORG_ID=your-yandex-cloud-org-id
-YA_ACCESS_TOKEN=your-yandex-access-token
-YA_CLIENT_ID=your-yandex-client-id
-YA_CLIENT_SECRET=your-yandex-client-secret
-YA_REFRESH_TOKEN=your-yandex-refresh-token
+```ini
+; Configuration file
+
+[Settings]
+sync_mode           = 1
+queue               = TEA
+board_id            = 52
+interval_minutes    = 5
+
+[Gandiva]
+login                   = your_login
+password                = your_password
+programmer_id           = your_programmer_id
+max_concurrent_requests = 10
+
+[Yandex]
+x_cloud_org_id  = your_x_cloud_org_id
+oauth_token     = your_oauth_token
+client_id       = your_client_id
+client_secret   = your_client_secret
+
+[Database]
+url = sqlite:///project.db
+
+[YandexCustomFieldIds]
+gandiva                 = your_gandiva_field_id
+initiator               = your_initiator_field_id
+initiator_department    = your_initiator_department_field_id
 ```
-
-- **TG_BOT_TOKEN**: Your Telegram bot token.
-- **YA_X_CLOUD_ORG_ID**: Your Yandex Cloud organization ID.
-- **YA_ACCESS_TOKEN**: Your Yandex OAuth access token.
-- **YA_CLIENT_ID**: Your Yandex OAuth client ID.
-- **YA_CLIENT_SECRET**: Your Yandex OAuth client secret.
-- **YA_REFRESH_TOKEN**: Your Yandex OAuth refresh token.
 
 ### 5. Run the bot
 
@@ -80,22 +85,10 @@ To start the bot, run:
 python main.py
 ```
 
-The bot will start polling for updates. You can interact with it on Telegram by sending commands.
-
-## Usage
-
-- Start a conversation with the bot by typing `/start`.
-- The bot will ask for your Yandex login to fetch your tasks.
-- Use the `/tasks` command to display your tasks from Yandex.Tracker.
-
-## Refreshing Yandex OAuth Token
-
-If your Yandex OAuth token expires, the bot will attempt to refresh it automatically using the refresh token. Make sure your `.env` file is correctly configured with all required Yandex OAuth credentials.
-
 ## License
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for more details.
 
 ---
 
-This is a basic setup for the SuccessYaTrackerTGBot. Adjust the `.env` file settings and Python dependencies as needed for your specific environment.
+This is a basic setup for the GTY. Adjust the `config.ini` file settings and Python dependencies as needed for your specific environment.
