@@ -2,7 +2,7 @@
 
 # GTY (Gandiva To Yandex)
 
-GTY is a service designed to automate synchronization process between Gandiva and Yandex Tracker services.
+GTY is a service designed to automate synchronization process between Gandiva and Yandex Tracker services. The project was made for Success company (IT Department). 
 
 ## Requirements
 
