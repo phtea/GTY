@@ -2,22 +2,22 @@ import asyncio
 import logging
 # String manipulations
 import urllib.parse
-
-import os
-import dotenv
+import configparser
 import json
 from utils import make_http_request
 
+# Path to the .ini file
+CONFIG_PATH = 'config.ini'
+config = configparser.ConfigParser()
+config.read(CONFIG_PATH)
 
-# Load environment variables
-DOTENV_PATH = ".env"
-dotenv.load_dotenv()
-
-GAND_ACCESS_TOKEN   = os.environ.get("GAND_ACCESS_TOKEN")
-GAND_REFRESH_TOKEN  = os.environ.get("GAND_REFRESH_TOKEN")
-GAND_PASSWORD       = os.environ.get("GAND_PASSWORD")
-GAND_LOGIN          = os.environ.get("GAND_LOGIN")
-GAND_PROGRAMMER_ID  = 777799898898
+# Globals
+GAND_ACCESS_TOKEN       = ''
+GAND_REFRESH_TOKEN      = ''
+GAND_LOGIN              = config.get('Gandiva', 'login')
+GAND_PASSWORD           = config.get('Gandiva', 'password')
+GAND_PROGRAMMER_ID      = config.getint('Gandiva', 'programmer_id')
+MAX_CONCURRENT_REQUESTS = config.getint('Gandiva', 'max_concurrent_requests')
 
 from functools import wraps
 
@@ -80,16 +80,12 @@ async def get_access_token(username, password):
         access_token = response_json.get('access_token')
         refresh_token = response_json.get('refresh_token')
 
-        # Update global tokens and environment variables
+        # Update global tokens
         global GAND_ACCESS_TOKEN
         GAND_ACCESS_TOKEN = access_token
-        os.environ["GAND_ACCESS_TOKEN"] = access_token
-        dotenv.set_key(DOTENV_PATH, "GAND_ACCESS_TOKEN", access_token)
 
         global GAND_REFRESH_TOKEN
         GAND_REFRESH_TOKEN = refresh_token
-        os.environ["GAND_REFRESH_TOKEN"] = refresh_token
-        dotenv.set_key(DOTENV_PATH, "GAND_REFRESH_TOKEN", refresh_token)
         logging.info(f"Authorized user: {username} [Gandiva]")
         return access_token
     else:
@@ -123,13 +119,9 @@ async def refresh_access_token(refresh_token):
         # Update global tokens and environment variables
         global GAND_ACCESS_TOKEN
         GAND_ACCESS_TOKEN = access_token
-        os.environ["GAND_ACCESS_TOKEN"] = access_token
-        dotenv.set_key(DOTENV_PATH, "GAND_ACCESS_TOKEN", access_token)
 
         global GAND_REFRESH_TOKEN
         GAND_REFRESH_TOKEN = refresh_token
-        os.environ["GAND_REFRESH_TOKEN"] = refresh_token
-        dotenv.set_key(DOTENV_PATH, "GAND_REFRESH_TOKEN", refresh_token)
 
         logging.info('Successfully refreshed Gandiva token')
 
@@ -185,7 +177,7 @@ async def get_page_of_tasks(page_number):
     filter_data = {
         "Departments": [2],
         "Categories": [32],
-        "Statuses": [4, 5, 6, 8, 10, 11, 12, 13]
+        "Statuses": [3, 4, 6, 8, 10, 11]
     }
 
     body = {
@@ -232,9 +224,10 @@ async def get_task_comments(task_id):
         return None
 
 # Define the function to get comments for a list of task IDs with concurrency control
-async def get_comments_for_tasks_concurrently(task_ids: list[int], max_concurrent_requests: int = 5):
+async def get_comments_for_tasks_concurrently(task_ids: list[int]):
     """Fetch comments for a list of tasks with a limit on concurrent requests."""
     task_comments = {}
+    max_concurrent_requests = MAX_CONCURRENT_REQUESTS if MAX_CONCURRENT_REQUESTS else 5
     semaphore = asyncio.Semaphore(max_concurrent_requests)  # Create a semaphore with the desired limit
 
     async def fetch_comments(task_id):
@@ -280,7 +273,7 @@ async def get_all_tasks():
 
     # Calculate the total number of pages
     total_pages = (total_requests // 100) + 1
-    logging.info(f"Found {total_pages} pages of tasks. [Gandiva]")
+    logging.debug(f"Found {total_pages} pages of tasks. [Gandiva]")
 
     # Create a list of tasks for all remaining pages
     tasks = [
@@ -295,6 +288,8 @@ async def get_all_tasks():
     for response in responses:
         if response:
             all_requests.extend(response['Requests'])
+
+    logging.info(f"Fetched {len(all_requests)} tasks. [Gandiva]")
 
     return all_requests
 

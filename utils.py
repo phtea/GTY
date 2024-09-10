@@ -55,21 +55,9 @@ def extract_task_ids(tasks: list) -> list:
     """Extracts the 'Id' values from a list of tasks."""
     return [task.get('Id') for task in tasks if 'Id' in task]
 
-def get_transition_from_gandiva_status(gandiva_status):
-    status_to_transition = {
-        4: "fourinformationrequiredMeta",
-        5: "onecancelledMeta",
-        6: "threewritingtechnicalspecificMeta",
-        8: "acceptanceintheworkbaseMeta",
-        10: "twowaitingfortheanalystMeta",
-        11: "twowaitingfortheanalystMeta",
-        12: "twowaitingfortheanalystMeta",
-        13: "threewritingtechnicalspecificMeta"
-    }
-    return status_to_transition.get(gandiva_status)
-
 def get_ya_status_step(ya_status):
     status_to_step = {
+        "open": 0,
         "onenew": 1,
         "twowaitingfortheanalyst": 2,
         "threewritingtechnicalspecific": 3,
@@ -91,10 +79,13 @@ def get_ya_status_step(ya_status):
 
 def get_transition_from_gandiva_status(gandiva_status):
     status_to_transition = {
+        3: "fiveapprovaloftheTORMeta",
         4: "fourinformationrequiredMeta",
         5: "onecancelledMeta",
         6: "threewritingtechnicalspecificMeta",
+        7: "onecancelledMeta",
         8: "acceptanceintheworkbaseMeta",
+        9: "oneclosedMeta",
         10: "twowaitingfortheanalystMeta",
         11: "twowaitingfortheanalystMeta",
         12: "twowaitingfortheanalystMeta",
@@ -102,31 +93,10 @@ def get_transition_from_gandiva_status(gandiva_status):
     }
     return status_to_transition.get(gandiva_status)
 
-def get_ya_status_step(ya_status):
-    status_to_step = {
-        "onenew": 1,
-        "twowaitingfortheanalyst": 2,
-        "threewritingtechnicalspecific": 3,
-        "fourinformationrequired": 4,
-        "fiveapprovaloftheTOR": 5,
-        "sixwaitingforthedeveloper": 6,
-        "sevenprogramming": 7,
-        "eightreadyfortesting": 8,
-        "testingbyananalystQA": 9,
-        "correctionoftherevision": 10,
-        "writinginstructions": 11,
-        "testingbytheinitiatorinthetest": 12,
-        "readyforrelease": 13,
-        "acceptanceintheworkbase": 14,
-        "oneclosed": 15,
-        "onecancelled": 16
-    }
-    return status_to_step.get(ya_status)
 
 def extract_text_from_html(html):
     soup = BeautifulSoup(html, "html.parser")
     return soup.get_text()
-
 
 def get_all_unique_initiators(gandiva_tasks):
     """Extract unique Initiator IDs"""
