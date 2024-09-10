@@ -1,93 +1,24 @@
-import os
 import logging
 import asyncio
-from telebot.async_telebot import AsyncTeleBot
-from telebot.types import ReplyKeyboardRemove
-from telebot import custom_filters
-
 import gandiva_api
 import yandex_api
 import db_module as db
 import utils
-
-import aiohttp
 import re
+import configparser
 
-# Load environment variables
-from dotenv import load_dotenv
-load_dotenv()
-TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN")
-# Handle not enough data in .env
-if not TG_BOT_TOKEN:
-    raise ValueError("No TG_BOT_TOKEN found in environment variables. Please check your .env file.")
+# Path to the .ini file
+CONFIG_PATH = 'config.ini'
+config = configparser.ConfigParser()
+config.read(CONFIG_PATH)
 
-# Define the database URL
-DB_URL = 'sqlite:///project.db'  # Using SQLite for simplicity
-
+# Globals
+DB_URL      = config.get('Database', 'url')
 # Create the database and tables
-DB_ENGINE = db.create_database(DB_URL)
-DB_SESSION = db.get_session(DB_ENGINE)
+DB_ENGINE   = db.create_database(DB_URL)
+DB_SESSION  = db.get_session(DB_ENGINE)
 
-# Initialize the bot
-bot = AsyncTeleBot(TG_BOT_TOKEN)
-
-# In-memory user data storage
-user_data = {}
-
-# Start command handler
-@bot.message_handler(commands=['start'])
-async def cmd_start(message):
-    await bot.send_message(message.chat.id, "Пожалуйста, введите логин, чтобы проверить статус задач:")
-    user_data[message.chat.id] = {}  # Initialize user data for the chat
-
-# Login handler
-@bot.message_handler(func=lambda message: message.chat.id in user_data and 'login' not in user_data[message.chat.id])
-async def process_login(message):
-    user_data[message.chat.id]['login'] = message.text.strip()
-    await bot.send_message(message.chat.id, f"Логин принят: {message.text.strip()}.")
-
-# Task fetching handler
-@bot.message_handler(commands=['tasks'])
-async def fetch_tasks(message):
-    if message.chat.id not in user_data or 'login' not in user_data[message.chat.id]:
-        await bot.send_message(message.chat.id, "Не удалось найти логин. Пожалуйста, начните с команды /start.")
-        return
-
-    login = user_data[message.chat.id]['login']
-    logging.info(f"Fetching tasks for user: {login}")
-
-    tasks = await yandex_api.get_page_of_tasks(login=login)
-
-    if tasks is None:
-        await bot.send_message(message.chat.id, "Не удалось получить задачи от Yandex.Tracker.")
-        return
-
-    if not tasks:
-        await bot.send_message(message.chat.id, "У вас нет ни одной активной задачи.")
-        return
-
-    for task in tasks:
-        task_text = (
-            f"Task Number: {task.get('key')}\n"
-            f"Title: {task.get('summary')}\n"
-            f"Description: {task.get('description')}\n"
-            f"Status: {task.get('statusType', {}).get('value')}"
-        )
-        await bot.send_message(message.chat.id, task_text)
-
-# Cancel command handler
-@bot.message_handler(commands=['cancel'])
-async def cancel_handler(message):
-    if message.chat.id in user_data:
-        del user_data[message.chat.id]  # Remove user data
-    await bot.send_message(message.chat.id, "Диалог отменен.", reply_markup=ReplyKeyboardRemove())
-
-async def batch_move_tasks_status(g_tasks, ya_tasks):
-    grouped_ya_tasks = utils.filter_and_group_tasks_by_new_status(gandiva_tasks=g_tasks, yandex_tasks=ya_tasks)
-    await yandex_api.move_groups_tasks_status(grouped_ya_tasks)
-    logging.info("All statuses are up-to-date!")
-
-async def sync_gandiva_comments(g_tasks, sync_mode: int, get_comments_execution: str):
+async def sync_comments(g_tasks, sync_mode: int, get_comments_execution: str):
     """
     Synchronizes comments between services.
     sync_mode can be 1 or 2:
@@ -106,7 +37,7 @@ async def sync_gandiva_comments(g_tasks, sync_mode: int, get_comments_execution:
         tasks_comments = await gandiva_api.get_comments_for_tasks_concurrently(g_tasks_ids)
     elif get_comments_execution == 'sync':
         tasks_comments = await gandiva_api.get_comments_for_tasks_consecutively(g_tasks_ids)
-    logging.info("Adding unexisting comments... [Yandex Tracker]")
+    logging.info("Adding comments... [Yandex Tracker]")
     for task_id, comments in tasks_comments.items():
         yandex_task = db.find_task_by_gandiva_id(session=DB_SESSION, task_id_gandiva=task_id)
         yandex_task_id = yandex_task.task_id_yandex
@@ -157,7 +88,7 @@ async def sync_gandiva_comments(g_tasks, sync_mode: int, get_comments_execution:
     # Log the total number of added tasks
     logging.info(f"Total comments added: {added_comment_count}")
 
-async def sync_services(queue, sync_mode):
+async def sync_services(queue: str, sync_mode: str, board_id: int):
     """
     Syncronize Gandiva and Yandex Tracker services.
     queue: working queue in Yandex Tracker.
@@ -165,28 +96,53 @@ async def sync_services(queue, sync_mode):
     1 - all comments, 2 - only for programmers.
     """
     
-    logging.info(f"Syncing services...")
+    logging.info(f"Sync started!")
     await yandex_api.check_access_token(yandex_api.YA_ACCESS_TOKEN)
     await gandiva_api.get_access_token(gandiva_api.GAND_LOGIN, gandiva_api.GAND_PASSWORD)
     g_tasks = await gandiva_api.get_all_tasks()
+    
     await yandex_api.add_tasks(g_tasks, queue=queue)
     ya_tasks = await yandex_api.get_all_tasks(queue)
     await yandex_api.edit_tasks(g_tasks, ya_tasks)
-    await batch_move_tasks_status(g_tasks, ya_tasks)
-    await sync_gandiva_comments(g_tasks, sync_mode, 'async')
-    logging.info(f"Sync finished successfully!")
+    await yandex_api.batch_move_tasks_status(g_tasks, ya_tasks)
+    await sync_comments(g_tasks, sync_mode, 'async')
+    await yandex_api.create_weekly_release_sprint(board_id)
+    logging.info("Sync finished successfully!")
+    logging.info("-" * 40)
+
+
+async def run_sync_services_periodically(queue: str, sync_mode: int, board_id: int, interval_minutes: int = 30):
+    """Runs sync_services every interval_minutes."""
+    while True:
+        try:
+            await sync_services(queue, sync_mode, board_id)  # Call sync_services
+        except Exception as e:
+            # Log any error that happens in sync_services
+            print(f"Error during sync_services: {e}")
+        
+        # Wait for the specified interval before running sync_services again
+        logging.info(f"Next sync will happen in {interval_minutes} minutes")
+        await asyncio.sleep(interval_minutes * 60)
 
 # Main function to start the bot
 async def main():
     utils.setup_logging()
-    sync_mode = 1
-    queue = "TEA"
-    await sync_services(queue, sync_mode)
-
-    return
-    await bot.polling()
-
-
+    
+    try:
+        sync_mode = config.getint('Settings', 'sync_mode')
+        queue = config.get('Settings', 'queue')
+        board_id = config.getint('Settings', 'board_id')
+        interval_minutes = config.getint('Settings', 'interval_minutes')
+    except Exception as e:  # Catch any exception
+        logging.warning(f"Error fetching config values: {e}. Using default values.")
+        sync_mode = 1
+        queue = "TEA"
+        board_id = 52
+        interval_minutes = 5
+    
+    
+    # Start sync_services in the background and run every N minutes
+    await run_sync_services_periodically(queue, sync_mode, board_id, interval_minutes=interval_minutes)
 
 if __name__ == "__main__":
     asyncio.run(main())
