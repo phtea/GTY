@@ -445,27 +445,23 @@ async def add_tasks(tasks_gandiva, queue):
     added_task_count = 0
 
     for task in tasks_gandiva:
-        gandiva_task_id = str(task['Id'])
-        initiator_name = f"{task['Initiator']['FirstName']} {task['Initiator']['LastName']}"
-        description_html = task['Description']
-        description = utils.html_to_yandex_format(description_html)  # Assuming a helper function to extract text from HTML
-        assignee_id_yandex = ""
-        task_type = "improvement"
-        initiator_id = task['Initiator']['Id']
-        initiator_department = await gandiva_api.get_department_by_user_id(user_id=initiator_id)
-        gandiva_start_date = task.get('RequiredStartDate')
-        yandex_start_date = None
-        if gandiva_start_date:
-            yandex_start_date = utils.gandiva_to_yandex_date(gandiva_start_date)
-
+        fields = await convert_gandiva_to_yandex_fields(task, edit=False)
+        initiator_name = fields.get('initiator_name')
+        gandiva_task_id = fields.get('gandiva_task_id')
+        initiator_department=fields.get('initiator_department')
+        description=fields.get('description')
+        assignee_yandex_id=fields.get('assignee_id_yandex')
+        task_type=fields.get('task_type')
+        start=fields.get('yandex_start_date')
         # Call add_task and check if a task was successfully added
-        result = await add_task(gandiva_task_id, initiator_name,
+        result = await add_task(gandiva_task_id,
+                                initiator_name,
                                 initiator_department=initiator_department,
                                 description=description,
                                 queue=queue,
-                                assignee_yandex_id=assignee_id_yandex,
+                                assignee_yandex_id=assignee_yandex_id,
                                 task_type=task_type,
-                                start=yandex_start_date)
+                                start=start)
 
         # Check if the result indicates the task was added (assuming it returns a dict on success)
         if isinstance(result, dict):
@@ -490,16 +486,12 @@ async def edit_tasks(tasks_gandiva, ya_tasks):
     edited_task_count = 0
 
     for task in tasks_gandiva:
-        gandiva_task_id = str(task['Id'])
-        initiator_name = f"{task['Initiator']['FirstName']} {task['Initiator']['LastName']}"
-        description_html = task['Description']
-        description = utils.html_to_yandex_format(description_html)
-        initiator_id = task['Initiator']['Id']
-        initiator_department = await gandiva_api.get_department_by_user_id(user_id=initiator_id)
-        gandiva_start_date = task.get('RequiredStartDate')
-        yandex_start_date = None
-        if gandiva_start_date:
-            yandex_start_date = utils.gandiva_to_yandex_date(gandiva_start_date)
+        fields = await convert_gandiva_to_yandex_fields(task, edit=True)
+        initiator_name = fields.get('initiator_name')
+        initiator_department = fields.get('initiator_department')
+        description = fields.get('description')
+        gandiva_task_id = fields.get('gandiva_task_id')
+        yandex_start_date = fields.get('yandex_start_date')
 
         # Find the corresponding Yandex task using the dictionary
         task_yandex = ya_tasks_dict.get(gandiva_task_id)
@@ -611,7 +603,7 @@ async def move_task_status(
 
     # Set a default comment if not provided
     if not comment:
-        comment = f"Task status has been successfully moved to {transition_id} for {task_id_yandex}."
+        comment = f"Task status has been moved to {transition_id} for {task_id_yandex}."
 
     # Prepare the request body
     body = {
@@ -648,7 +640,7 @@ async def move_tasks_status(tasks, new_status):
 
     # Return the response JSON or None if the request failed
     if response_json:
-        logging.info(f"Tasks were succesfully moved to new status {new_status}")
+        logging.info(f"Tasks were moved to new status {new_status}: {len(task_keys)}")
         return response_json
     else:
         logging.error(f"Tasks were not moved to new status {new_status}")
