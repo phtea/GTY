@@ -2,8 +2,9 @@ import csv
 from bs4 import BeautifulSoup, MarkupResemblesLocatorWarning
 import re
 import logging
-import warnings
 import aiohttp
+import datetime
+import warnings
 warnings.filterwarnings("ignore", category=MarkupResemblesLocatorWarning)
 
 GANDIVA_HOST = "https://gandiva.s-stroy.ru"
@@ -157,6 +158,20 @@ def html_to_yandex_format(html):
 
     # Final text extraction
     return soup.get_text().strip()
+
+def gandiva_to_yandex_date(gandiva_date: str) -> str:
+    """
+    Converts a Gandiva date (with time and timezone) to Yandex date (only date part).
+    Args:
+        gandiva_date (str): The date string in Gandiva format (e.g., '2025-08-01T00:00:00+03:00').
+    Returns:
+        str: The date in Yandex format (e.g., '2025-08-01').
+    """
+    # Parse the Gandiva date string into a datetime object
+    date_obj = datetime.datetime.fromisoformat(gandiva_date)
+    
+    # Convert the datetime object back to a string in 'YYYY-MM-DD' format
+    return date_obj.strftime('%Y-%m-%d')
 
 async def make_http_request(method, url, headers=None, body=None):
     """Generalized function to handle HTTP GET/POST requests."""

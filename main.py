@@ -124,6 +124,11 @@ async def run_sync_services_periodically(queue: str, sync_mode: int, board_id: i
         logging.info(f"Next sync will happen in {interval_minutes} minutes")
         await asyncio.sleep(interval_minutes * 60)
 
+async def update_tasks_in_db(queue: str):
+    await yandex_api.check_access_token(yandex_api.YA_ACCESS_TOKEN)
+    ya_tasks = await yandex_api.get_all_tasks(queue)
+    db.add_tasks_to_db(session=DB_SESSION, tasks=ya_tasks)
+
 # Main function to start the bot
 async def main():
     utils.setup_logging()
@@ -140,7 +145,7 @@ async def main():
         board_id = 52
         interval_minutes = 5
     
-    
+    await update_tasks_in_db(queue = queue)
     # Start sync_services in the background and run every N minutes
     await run_sync_services_periodically(queue, sync_mode, board_id, interval_minutes=interval_minutes)
 

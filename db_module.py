@@ -99,9 +99,12 @@ def add_tasks_to_db(session: Session, tasks: list):
     :param tasks: A list of task dictionaries where 'key' is task_id_yandex and 'unique' is task_id_gandiva.
     :return: None
     """
+    total_tasks = 0
     for task_data in tasks:
-        task_id_yandex = task_data['key']
-        task_id_gandiva = task_data['unique']
+        task_id_yandex = task_data.get('key')
+        task_id_gandiva = task_data.get('unique')
+        if not task_id_gandiva:
+            continue
 
         # Check if the task already exists by task_id_yandex
         existing_task = session.query(Task).filter_by(task_id_yandex=task_id_yandex).one_or_none()
@@ -112,8 +115,10 @@ def add_tasks_to_db(session: Session, tasks: list):
             session.add(new_task)
             logging.info(f"Task {task_id_yandex} added to the database.")
         else:
-            logging.info(f"Task {task_id_yandex} already exists in the database.")
+            logging.debug(f"Task {task_id_yandex} already exists in the database.")
+        
+        total_tasks += 1
 
     # Commit the changes to the database
     session.commit()
-    logging.info("Tasks committed to the database.")
+    logging.info(f"{total_tasks} tasks in the database.")

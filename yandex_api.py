@@ -140,6 +140,59 @@ async def get_access_token_captcha() -> str:
     yandex_access_token = yandex_id_metadata.get("access_token")
     return yandex_access_token
 
+# Utils specific to Yandex
+
+async def convert_gandiva_to_yandex_fields(task: dict, edit: bool):
+    """
+    Converts fields from Gandiva task format to Yandex task format.
+
+    Args:
+        task (dict): The Gandiva task dictionary.
+        edit (bool): If True, converts fields for editing tasks. If False, for adding tasks.
+
+    Returns:
+        dict: Converted Yandex task fields.
+    """
+    # Common fields for both add and edit tasks
+    gandiva_task_id = str(task['Id'])
+    initiator_name = f"{task['Initiator']['FirstName']} {task['Initiator']['LastName']}"
+    description_html = task['Description']
+    description = utils.html_to_yandex_format(description_html)  # Assuming a helper function to extract text from HTML
+    initiator_id = task['Initiator']['Id']
+    initiator_department = await gandiva_api.get_department_by_user_id(user_id=initiator_id)
+    
+    # Convert dates if they exist
+    gandiva_start_date = task.get('RequiredStartDate')
+    yandex_start_date = None
+    if gandiva_start_date:
+        yandex_start_date = utils.gandiva_to_yandex_date(gandiva_start_date)
+
+    # Fields that are specific to the "add" operation
+    if not edit:
+        assignee_id_yandex = ""  # Assuming this is only used in the add task
+        task_type = "improvement"  # Task type specific to add tasks
+
+        return {
+            'gandiva_task_id': gandiva_task_id,
+            'initiator_name': initiator_name,
+            'description': description,
+            'assignee_id_yandex': assignee_id_yandex,
+            'task_type': task_type,
+            'initiator_id': initiator_id,
+            'initiator_department': initiator_department,
+            'yandex_start_date': yandex_start_date
+        }
+
+    # Fields that are specific to the "edit" operation
+    return {
+        'gandiva_task_id': gandiva_task_id,
+        'initiator_name': initiator_name,
+        'description': description,
+        'initiator_id': initiator_id,
+        'initiator_department': initiator_department,
+        'yandex_start_date': yandex_start_date
+    }
+
 # Functions
 
 def get_account_info(access_token) -> requests.Response:
@@ -322,7 +375,8 @@ async def add_task(task_id_gandiva,
                    description="Без описания",
                    assignee_yandex_id=None,
                    task_type=None,
-                   initiator_department=None):
+                   initiator_department=None,
+                   start=None):
 
     # Convert the task ID to a string
     task_id_gandiva = str(task_id_gandiva)
@@ -345,13 +399,15 @@ async def add_task(task_id_gandiva,
         "unique": task_id_gandiva,
     }
 
-    # Optionally add assignee and task type if provided
+    # Optionally add other fields
     if assignee_yandex_id:
         body["assignee"] = assignee_yandex_id
     if task_type:
         body["type"] = task_type
     if initiator_department:
         body[YA_FIELD_ID_INITIATOR_DEPARTMENT] = initiator_department
+    if start:
+        body["start"] = start
 
     # Convert the body to a JSON string
     body_json = json.dumps(body)
@@ -389,22 +445,23 @@ async def add_tasks(tasks_gandiva, queue):
     added_task_count = 0
 
     for task in tasks_gandiva:
-        gandiva_task_id = str(task['Id'])
-        initiator_name = f"{task['Initiator']['FirstName']} {task['Initiator']['LastName']}"
-        description_html = task['Description']
-        description = utils.html_to_yandex_format(description_html)  # Assuming a helper function to extract text from HTML
-        assignee_id_yandex = ""
-        task_type = "improvement"
-        initiator_id = task['Initiator']['Id']
-        initiator_department = await gandiva_api.get_department_by_user_id(user_id=initiator_id)
-
+        fields = await convert_gandiva_to_yandex_fields(task, edit=False)
+        initiator_name = fields.get('initiator_name')
+        gandiva_task_id = fields.get('gandiva_task_id')
+        initiator_department=fields.get('initiator_department')
+        description=fields.get('description')
+        assignee_yandex_id=fields.get('assignee_id_yandex')
+        task_type=fields.get('task_type')
+        start=fields.get('yandex_start_date')
         # Call add_task and check if a task was successfully added
-        result = await add_task(gandiva_task_id, initiator_name,
+        result = await add_task(gandiva_task_id,
+                                initiator_name,
                                 initiator_department=initiator_department,
                                 description=description,
                                 queue=queue,
-                                assignee_yandex_id=assignee_id_yandex,
-                                task_type=task_type)
+                                assignee_yandex_id=assignee_yandex_id,
+                                task_type=task_type,
+                                start=start)
 
         # Check if the result indicates the task was added (assuming it returns a dict on success)
         if isinstance(result, dict):
@@ -429,12 +486,12 @@ async def edit_tasks(tasks_gandiva, ya_tasks):
     edited_task_count = 0
 
     for task in tasks_gandiva:
-        gandiva_task_id = str(task['Id'])
-        initiator_name = f"{task['Initiator']['FirstName']} {task['Initiator']['LastName']}"
-        description_html = task['Description']
-        description = utils.html_to_yandex_format(description_html)
-        initiator_id = task['Initiator']['Id']
-        initiator_department = await gandiva_api.get_department_by_user_id(user_id=initiator_id)
+        fields = await convert_gandiva_to_yandex_fields(task, edit=True)
+        initiator_name = fields.get('initiator_name')
+        initiator_department = fields.get('initiator_department')
+        description = fields.get('description')
+        gandiva_task_id = fields.get('gandiva_task_id')
+        yandex_start_date = fields.get('yandex_start_date')
 
         # Find the corresponding Yandex task using the dictionary
         task_yandex = ya_tasks_dict.get(gandiva_task_id)
@@ -444,14 +501,21 @@ async def edit_tasks(tasks_gandiva, ya_tasks):
             edit_initiator_name = None
             edit_initiator_department = None
             edit_description = None
+            edit_yandex_start_date = None
             task_id_yandex = task_yandex.get('key')
-
+            edit = False
             if initiator_name and not task_yandex.get(YA_FIELD_ID_INITIATOR):
                 edit_initiator_name = initiator_name
+                edit = True
             if initiator_department and not task_yandex.get(YA_FIELD_ID_INITIATOR_DEPARTMENT):
                 edit_initiator_department = initiator_department
+                edit = True
             if description and not task_yandex.get('description'):
                 edit_description = description
+                edit = True
+            if yandex_start_date and not task_yandex.get('start'):
+                edit_yandex_start_date = yandex_start_date
+                edit = True
 
             # TODO: add analyst and assignee later
             # if not task_yandex['66d379ee99b2de14092e0185--Analyst']:
@@ -460,11 +524,12 @@ async def edit_tasks(tasks_gandiva, ya_tasks):
             #     edit_assignee_id_yandex = assignee_id_yandex
 
             # If any field needs to be edited, call the edit function
-            if edit_initiator_name or edit_initiator_department or edit_description:
+            if edit:
                 await edit_task(task_id_yandex=task_id_yandex,
                                 initiator_name=edit_initiator_name,
                                 initiator_department=edit_initiator_department,
-                                description=edit_description)
+                                description=edit_description,
+                                start=edit_yandex_start_date)
                 # Increment the counter
                 edited_task_count += 1
             else:
@@ -484,7 +549,8 @@ async def edit_task(task_id_yandex,
                     sprint=None,
                     followers=None,
                     initiator_name=None,
-                    initiator_department=None):
+                    initiator_department=None,
+                    start=None):
 
     # Convert the task ID to a string
     task_id_yandex = str(task_id_yandex)
@@ -508,6 +574,7 @@ async def edit_task(task_id_yandex,
     if followers: body["followers"] = {"add": followers}
     if initiator_name: body[YA_FIELD_ID_INITIATOR] = initiator_name
     if initiator_department: body[YA_FIELD_ID_INITIATOR_DEPARTMENT] = initiator_department
+    if start: body["start"] = start
 
     # Convert the body to a JSON string
     body_json = json.dumps(body)
@@ -536,7 +603,7 @@ async def move_task_status(
 
     # Set a default comment if not provided
     if not comment:
-        comment = f"Task status has been successfully moved to {transition_id} for {task_id_yandex}."
+        comment = f"Task status has been moved to {transition_id} for {task_id_yandex}."
 
     # Prepare the request body
     body = {
@@ -573,7 +640,7 @@ async def move_tasks_status(tasks, new_status):
 
     # Return the response JSON or None if the request failed
     if response_json:
-        logging.info(f"Tasks were succesfully moved to new status {new_status}")
+        logging.info(f"Tasks were moved to new status {new_status}: {len(task_keys)}")
         return response_json
     else:
         logging.error(f"Tasks were not moved to new status {new_status}")
