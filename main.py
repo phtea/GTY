@@ -7,7 +7,6 @@ import utils
 import re
 import configparser
 
-# Path to the .ini file
 CONFIG_PATH = 'config.ini'
 config = configparser.ConfigParser()
 config.read(CONFIG_PATH)
