@@ -41,7 +41,7 @@ async def sync_comments(g_tasks, sync_mode: int, get_comments_execution: str):
     for task_id, comments in tasks_comments.items():
         yandex_task = db.find_task_by_gandiva_id(session=DB_SESSION, task_id_gandiva=task_id)
         yandex_task_id = yandex_task.task_id_yandex
-        yandex_comments = await yandex_api.get_all_comments(yandex_task_id=yandex_task_id)
+        yandex_comments = await yapi.get_all_comments(yandex_task_id=yandex_task_id)
         logging.debug(f"Syncing comments for task {task_id}...")
         # Extract g_comment_ids from yandex_comments
         existing_g_comment_ids = set()
@@ -76,7 +76,7 @@ async def sync_comments(g_tasks, sync_mode: int, get_comments_execution: str):
                     continue  # Skip comment if the programmer is not found
 
             # Send the comment to Yandex if sync_mode is not 2 or if GANDIVA_PROGRAMMER_ID is found
-            result = await yandex_api.add_comment(
+            result = await yapi.add_comment(
                 yandex_task_id=yandex_task_id,
                 comment=text,
                 g_comment_id=g_comment_id,
@@ -97,23 +97,23 @@ async def sync_services(queue: str, sync_mode: str, board_id: int):
     """
     
     logging.info(f"Sync started!")
-    await yandex_api.check_access_token(yandex_api.YA_ACCESS_TOKEN)
+    await yapi.check_access_token(yapi.YA_ACCESS_TOKEN)
     await gapi.get_access_token(gapi.GAND_LOGIN, gapi.GAND_PASSWORD)
     g_tasks = await gapi.get_all_tasks(gapi.GroupsOfStatuses.in_progress)
     
-    await yandex_api.add_tasks(g_tasks, queue=queue)
-    ya_tasks = await yandex_api.get_all_tasks(queue)
-    await yandex_api.edit_tasks(g_tasks, ya_tasks)
-    await yandex_api.batch_move_tasks_status(g_tasks, ya_tasks)
+    await yapi.add_tasks(g_tasks, queue=queue)
+    ya_tasks = await yapi.get_all_tasks(queue)
+    await yapi.edit_tasks(g_tasks, ya_tasks)
+    await yapi.batch_move_tasks_status(g_tasks, ya_tasks)
 
     g_finished_tasks = await gapi.get_all_tasks(gapi.GroupsOfStatuses.finished)
-    await yandex_api.batch_move_tasks_status(g_finished_tasks, ya_tasks)
+    await yapi.batch_move_tasks_status(g_finished_tasks, ya_tasks)
 
     await sync_comments(g_tasks, sync_mode, 'async')
 
 
 
-    await yandex_api.create_weekly_release_sprint(board_id)
+    await yapi.create_weekly_release_sprint(board_id)
     logging.info("Sync finished successfully!")
 
 
@@ -133,8 +133,8 @@ async def run_sync_services_periodically(queue: str, sync_mode: int, board_id: i
         await asyncio.sleep(interval_minutes * 60)
 
 async def update_tasks_in_db(queue: str):
-    await yandex_api.check_access_token(yandex_api.YA_ACCESS_TOKEN)
-    ya_tasks = await yandex_api.get_all_tasks(queue)
+    await yapi.check_access_token(yapi.YA_ACCESS_TOKEN)
+    ya_tasks = await yapi.get_all_tasks(queue)
     db.add_tasks_to_db(session=DB_SESSION, tasks=ya_tasks)
 
 # Main function to start the bot
