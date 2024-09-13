@@ -83,7 +83,7 @@ initiator_department    = your_initiator_department_field_id
 To start the bot, run:
 
 ```bash
-python main.py
+pythonw main.py
 ```
 
 ## License
