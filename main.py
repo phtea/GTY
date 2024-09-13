@@ -1,7 +1,7 @@
 import logging
 import asyncio
-import gandiva_api
-import yandex_api
+import gandiva_api as gapi
+import yandex_api as yapi
 import db_module as db
 import utils
 import re
@@ -34,9 +34,9 @@ async def sync_comments(g_tasks, sync_mode: int, get_comments_execution: str):
     added_comment_count = 0
     logging.info("Fetching comments... [Gandiva]")
     if get_comments_execution == 'async':
-        tasks_comments = await gandiva_api.get_comments_for_tasks_concurrently(g_tasks_ids)
+        tasks_comments = await gapi.get_comments_for_tasks_concurrently(g_tasks_ids)
     elif get_comments_execution == 'sync':
-        tasks_comments = await gandiva_api.get_comments_for_tasks_consecutively(g_tasks_ids)
+        tasks_comments = await gapi.get_comments_for_tasks_consecutively(g_tasks_ids)
     logging.info("Adding comments... [Yandex Tracker]")
     for task_id, comments in tasks_comments.items():
         yandex_task = db.find_task_by_gandiva_id(session=DB_SESSION, task_id_gandiva=task_id)
@@ -69,7 +69,7 @@ async def sync_comments(g_tasks, sync_mode: int, get_comments_execution: str):
             if sync_mode == 2:
                 send_comment = False
                 for addressee in addressees:
-                    if addressee['User']['Id'] == gandiva_api.GAND_PROGRAMMER_ID:
+                    if addressee['User']['Id'] == gapi.GAND_PROGRAMMER_ID:
                         send_comment = True
                         break
                 if not send_comment:
@@ -98,17 +98,23 @@ async def sync_services(queue: str, sync_mode: str, board_id: int):
     
     logging.info(f"Sync started!")
     await yandex_api.check_access_token(yandex_api.YA_ACCESS_TOKEN)
-    await gandiva_api.get_access_token(gandiva_api.GAND_LOGIN, gandiva_api.GAND_PASSWORD)
-    g_tasks = await gandiva_api.get_all_tasks()
+    await gapi.get_access_token(gapi.GAND_LOGIN, gapi.GAND_PASSWORD)
+    g_tasks = await gapi.get_all_tasks(gapi.GroupsOfStatuses.in_progress)
     
     await yandex_api.add_tasks(g_tasks, queue=queue)
     ya_tasks = await yandex_api.get_all_tasks(queue)
     await yandex_api.edit_tasks(g_tasks, ya_tasks)
     await yandex_api.batch_move_tasks_status(g_tasks, ya_tasks)
+
+    g_finished_tasks = await gapi.get_all_tasks(gapi.GroupsOfStatuses.finished)
+    await yandex_api.batch_move_tasks_status(g_finished_tasks, ya_tasks)
+
     await sync_comments(g_tasks, sync_mode, 'async')
+
+
+
     await yandex_api.create_weekly_release_sprint(board_id)
     logging.info("Sync finished successfully!")
-    logging.info("-" * 40)
 
 
 async def run_sync_services_periodically(queue: str, sync_mode: int, board_id: int, interval_minutes: int = 30):
@@ -121,7 +127,9 @@ async def run_sync_services_periodically(queue: str, sync_mode: int, board_id: i
             print(f"Error during sync_services: {e}")
         
         # Wait for the specified interval before running sync_services again
-        logging.info(f"Next sync will happen in {interval_minutes} minutes")
+        logging.info(f"Next sync in {interval_minutes} minutes")
+        logging.info("-" * 40)
+
         await asyncio.sleep(interval_minutes * 60)
 
 async def update_tasks_in_db(queue: str):

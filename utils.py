@@ -2,6 +2,7 @@ import csv
 from bs4 import BeautifulSoup, MarkupResemblesLocatorWarning
 import re
 import logging
+from logging.handlers import RotatingFileHandler
 import aiohttp
 import datetime
 import warnings
@@ -10,7 +11,22 @@ warnings.filterwarnings("ignore", category=MarkupResemblesLocatorWarning)
 GANDIVA_HOST = "https://gandiva.s-stroy.ru"
 
 def setup_logging():
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+    # 10 Megabytes
+    max_size = 1024*1024*10
+    backupCount=3
+    
+    # Create a rotating file handler
+    handler = RotatingFileHandler("gty.log", maxBytes=max_size, backupCount=backupCount)
+
+    # Set the logging format
+    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+    handler.setFormatter(formatter)
+
+    # Add handler to the root logger
+    logging.getLogger().addHandler(handler)
+
+    # Set logging level
+    logging.getLogger().setLevel(logging.INFO)
 
 def filter_and_group_tasks_by_new_status(gandiva_tasks: list, yandex_tasks: list) -> dict:
     """
@@ -173,28 +189,51 @@ def gandiva_to_yandex_date(gandiva_date: str) -> str:
     # Convert the datetime object back to a string in 'YYYY-MM-DD' format
     return date_obj.strftime('%Y-%m-%d')
 
-async def make_http_request(method, url, headers=None, body=None):
-    """Generalized function to handle HTTP GET/POST requests."""
-
+async def make_http_request(method, url, headers=None, body=None, session=None):
+    """
+    Generalized function to handle HTTP GET/POST requests.
+    
+    Args:
+    - method (str): HTTP method (GET, POST, PUT, PATCH, DELETE).
+    - url (str): The URL for the request.
+    - headers (dict, optional): Request headers.
+    - body (dict, optional): Request body.
+    - session (aiohttp.ClientSession, optional): Existing aiohttp session.
+    
+    Returns:
+    - dict or None: JSON response if successful, None otherwise.
+    """
+    
     valid_methods = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']
     if method.upper() not in valid_methods:
         logging.error(f"Invalid HTTP method: {method}")
         return None
-    
+
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.request(method, url, headers=headers, data=body) as response:
-                status_code = response.status
-                response_text = await response.text()  # For logging purposes
-                
-                if status_code in [200, 201]:
-                    return await response.json()  # Return the JSON response
-                else:
-                    logging.error(f"Request to {url} failed with status {status_code}: {response_text}")
-                    return None
+        # Create a new session if one is not provided
+        if session is None:
+            async with aiohttp.ClientSession() as session:
+                return await _make_request(session, method, url, headers, body)
+        else:
+            return await _make_request(session, method, url, headers, body)
+
     except Exception as e:
         logging.error(f"Exception during request to {url}: {str(e)}")
         return None
+
+async def _make_request(session, method, url, headers, body):
+    """
+    Helper function to make an HTTP request using a given session.
+    """
+    async with session.request(method, url, headers=headers, data=body) as response:
+        status_code = response.status
+        response_text = await response.text()  # For logging purposes
+        
+        if status_code in [200, 201]:
+            return await response.json()  # Return the JSON response
+        else:
+            logging.error(f"Request to {url} failed with status {status_code}: {response_text}")
+            return None
 
 # Manual mapping of month names in Russian
 MONTHS_RUSSIAN = {

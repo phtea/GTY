@@ -4,4 +4,5 @@
 *.csv
 *.db
 *.ini
-gandiva_api_class.py
+test.py
+*.log

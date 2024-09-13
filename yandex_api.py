@@ -1,6 +1,5 @@
 import logging
 import json
-import requests
 import asyncio
 import gandiva_api
 import datetime
@@ -94,12 +93,11 @@ async def check_access_token(access_token) -> str:
     Returns only when login was successful (+ refresh the token).
     """
     # Get account info using the provided access token
-    response = get_account_info(access_token)
+    response = await get_account_info(access_token)
 
     # Check if the response is successful
-    if response.status_code == 200:
-        user_info = response.json()  # Parse the JSON response
-        logging.info(f"Authorized user: {user_info['login']} [Yandex Tracker]")
+    if response:
+        logging.info(f"Authorized user: {response['login']} [Yandex Tracker]")
         return
 
     # If the response is not successful, refresh the access token
@@ -195,7 +193,7 @@ async def convert_gandiva_to_yandex_fields(task: dict, edit: bool):
 
 # Functions
 
-def get_account_info(access_token) -> requests.Response:
+async def get_account_info(access_token):
     """
     Gets Yandex account info by providing the access_token.
     """
@@ -206,7 +204,7 @@ def get_account_info(access_token) -> requests.Response:
     }
     
     # Make the HTTP POST request
-    response = requests.post(YA_INFO_TOKEN_URL, data=data)
+    response = await make_http_request('POST', YA_INFO_TOKEN_URL, headers=HEADERS, body=json.dumps(data))
 
     return response  # Return the response object
 

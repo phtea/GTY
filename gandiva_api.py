@@ -19,6 +19,12 @@ GAND_PASSWORD           = config.get('Gandiva', 'password')
 GAND_PROGRAMMER_ID      = config.getint('Gandiva', 'programmer_id')
 MAX_CONCURRENT_REQUESTS = config.getint('Gandiva', 'max_concurrent_requests')
 
+class GroupsOfStatuses:
+    in_progress = [3, 4, 6, 8, 10, 11]
+    finished = [5, 7, 9]
+
+
+
 from functools import wraps
 
 # Define the retry decorator
@@ -171,13 +177,13 @@ async def get_departments_for_users(user_ids):
     unique_departments = list(set(departments))
     return unique_departments     
 
-async def get_page_of_tasks(page_number):
+async def get_page_of_tasks(page_number: int, statuses: list[int]):
     """Fetch a page of tasks."""
     url = f"{HOST}/api/Requests/Filter"
     filter_data = {
         "Departments": [2],
         "Categories": [32],
-        "Statuses": [3, 4, 6, 8, 10, 11]
+        "Statuses": statuses
     }
 
     body = {
@@ -259,12 +265,12 @@ async def get_comments_for_tasks_consecutively(task_ids: list[int]):
 
     return task_comments
 
-async def get_all_tasks():
+async def get_all_tasks(statutes: list[int] = [3, 4, 6, 8, 10, 11]):
     logging.info("Fetching tasks... [Gandiva]")
     all_requests = []
     
     # Fetch the first page to get the total count and number of pages
-    first_page_data = await get_page_of_tasks(1)
+    first_page_data = await get_page_of_tasks(1, statuses=statutes)
     if not first_page_data:
         return all_requests  # Return an empty list if the first page request fails
 
@@ -277,7 +283,7 @@ async def get_all_tasks():
 
     # Create a list of tasks for all remaining pages
     tasks = [
-        get_page_of_tasks(page_number)
+        get_page_of_tasks(page_number, statuses=statutes)
         for page_number in range(2, total_pages + 1)
     ]
 
