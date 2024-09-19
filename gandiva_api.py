@@ -20,7 +20,7 @@ GAND_PROGRAMMER_ID      = config.getint('Gandiva', 'programmer_id')
 MAX_CONCURRENT_REQUESTS = config.getint('Gandiva', 'max_concurrent_requests')
 
 class GroupsOfStatuses:
-    in_progress = [3, 4, 6, 8, 10, 11]
+    in_progress = [3, 4, 6, 8, 10, 11, 12, 13]
     finished = [5, 7, 9]
 
 

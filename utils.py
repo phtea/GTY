@@ -28,10 +28,19 @@ def setup_logging():
     # Set logging level
     logging.getLogger().setLevel(logging.INFO)
 
-def filter_and_group_tasks_by_new_status(gandiva_tasks: list, yandex_tasks: list) -> dict:
+def group_tasks_by_status(gandiva_tasks: list, yandex_tasks: list, to_filter: bool = True) -> dict:
     """
-    Filters tasks where the Gandiva task has transitioned to a new status compared to the Yandex task,
-    and groups the tasks by their current Gandiva status.
+    Groups tasks by their current Gandiva status, with an option to filter tasks where 
+    the Gandiva task has transitioned to a new status compared to the Yandex task.
+    
+    Parameters:
+    - gandiva_tasks (list): List of tasks from Gandiva.
+    - yandex_tasks (list): List of tasks from Yandex.
+    - filter (bool): If True, only tasks where Gandiva status > Yandex status are grouped. 
+                     If False, all tasks are grouped by their Gandiva status.
+    
+    Returns:
+    - dict: Dictionary grouping tasks by their Gandiva status.
     """
     grouped_tasks = {}
 
@@ -53,11 +62,15 @@ def filter_and_group_tasks_by_new_status(gandiva_tasks: list, yandex_tasks: list
         current_g_status_step = get_ya_status_step(current_g_status)
         current_ya_status_step = get_ya_status_step(y_status)
 
-        # Step 5: Compare the Gandiva status and Yandex status
-        if current_g_status_step > current_ya_status_step:
-            if current_g_status not in grouped_tasks:
-                grouped_tasks[current_g_status] = []
-            grouped_tasks[current_g_status].append(y_task)
+        # Step 5: Apply filtering logic if required
+        if to_filter:
+            if current_g_status_step <= current_ya_status_step:
+                continue
+
+        # Step 6: Group tasks by Gandiva status
+        if current_g_status not in grouped_tasks:
+            grouped_tasks[current_g_status] = []
+        grouped_tasks[current_g_status].append(y_task)
 
     return grouped_tasks
 
@@ -96,7 +109,7 @@ def get_ya_status_step(ya_status):
 
 def get_transition_from_gandiva_status(gandiva_status):
     status_to_transition = {
-        3: "fiveapprovaloftheTORMeta",
+        3: "onenewMeta",
         4: "fourinformationrequiredMeta",
         5: "onecancelledMeta",
         6: "threewritingtechnicalspecificMeta",
@@ -251,7 +264,249 @@ MONTHS_RUSSIAN = {
     12: "декабря"
 }
 
+def extract_department_analysts(csv_file: str) -> dict:
+    """
+    Extracts departments and their corresponding analyst emails from the given CSV file.
+
+    Parameters:
+    - csv_file (str): Path to the CSV file containing department and analyst information.
+
+    Returns:
+    - dict: A dictionary where the keys are department names and the values are the corresponding analyst emails.
+    """
+    department_analyst_dict = {}
+
+    # Try a different encoding, such as ISO-8859-1 or cp1251
+    with open(csv_file, mode='r', encoding='cp1251') as file:  # Change encoding here
+        reader = csv.DictReader(file, delimiter=';')
+
+        for row in reader:
+            department = row['department']
+            analyst_email = row['yandex_analyst_mail']
+
+            # Store the analyst email corresponding to the department
+            department_analyst_dict[department] = analyst_email
+
+    return department_analyst_dict
+
+def map_department_to_user_id(department_analyst_dict: dict, users: list) -> dict:
+    """
+    Maps each department to the corresponding user ID based on matching email addresses.
+
+    Parameters:
+    - department_analyst_dict (dict): A dictionary where the keys are department names and the values are analyst emails.
+    - users (list): A list of user objects, where each object contains an 'email' and 'uid' key.
+
+    Returns:
+    - dict: A dictionary where the keys are department names and the values are the corresponding user IDs (uids).
+    """
+    department_user_mapping = {}
+
+    # Create a dictionary to quickly lookup user 'uid' by their email
+    email_to_uid = {user['email']: user['uid'] for user in users}
+
+    # Iterate over each department and find the matching uid for the analyst's email
+    for department, email in department_analyst_dict.items():
+        uid = email_to_uid.get(email)  # Find the user 'uid' by email
+        if uid:
+            department_user_mapping[department] = uid
+        else:
+            logging.warning(f"No user found with email {email} for department {department}")
+
+    return department_user_mapping
+
+def extract_it_users(csv_file_path: str) -> dict:
+    """
+    Extracts data from it_users.csv file and returns a dictionary where
+    yandex_mail is the key and gandiva_mail is the value.
+
+    :param csv_file_path: Path to the CSV file.
+    :return: A dictionary with yandex_mail as keys and gandiva_mail as values.
+    """
+    it_users_dict = {}
+
+    with open(csv_file_path, mode='r', encoding='utf-8') as file:
+        reader = csv.DictReader(file, delimiter=';')
+        
+        # Iterate over each row and map yandex_mail to gandiva_mail
+        for row in reader:
+            yandex_mail = row['yandex_mail']
+            gandiva_mail = row['gandiva_mail']
+            it_users_dict[yandex_mail] = gandiva_mail
+
+    return it_users_dict
+
+async def map_emails_to_ids(it_users_dict: dict, ya_users: list) -> dict:
+    """
+    Replace the Yandex email keys in it_users_dict with the corresponding Yandex user IDs (uid) 
+    based on the ya_users list.
+    
+    :param it_users_dict: Dictionary where keys are Yandex emails and values are Gandiva emails.
+    :param ya_users: List of Yandex users (each with 'email' and 'uid' keys).
+    :return: A new dictionary with Yandex user IDs (uid) as keys and Gandiva emails as values.
+    """
+    # Create a new dictionary to store the mapping of user ids to Gandiva emails
+    mapped_dict = {}
+
+    # Iterate over each Yandex email in it_users_dict
+    for yandex_email, gandiva_mail in it_users_dict.items():
+        # Find the Yandex user that has the same email in the ya_users list
+        yandex_user = next((user for user in ya_users if user.get('email') == yandex_email), None)
+        
+        if yandex_user:
+            # Replace the Yandex email with the corresponding Yandex user ID (uid)
+            yandex_uid = yandex_user.get('uid')
+            mapped_dict[yandex_uid] = gandiva_mail
+        else:
+            # If no user is found, log it or handle the case as needed
+            logging.warning(f"No Yandex user found for email {yandex_email}")
+
+    return mapped_dict
+
+def extract_unique_gandiva_users(g_tasks: list) -> dict:
+    """
+    Extracts unique email and ID pairs from Gandiva tasks for both Initiator and Contractor.
+    
+    :param g_tasks: List of Gandiva tasks.
+    :return: Dictionary with unique email as the key and ID as the value.
+    """
+    unique_users = {}
+
+    # Iterate over each task
+    for task in g_tasks:
+        # Extract Initiator details if present
+        initiator = task.get('Initiator')
+        if initiator:
+            initiator_email = initiator.get('Login')
+            initiator_id = initiator.get('Id')
+            if initiator_email and initiator_id:
+                unique_users[initiator_email] = initiator_id
+
+        # Extract Contractor details if present
+        contractor = task.get('Contractor')
+        if contractor:
+            contractor_email = contractor.get('Login')
+            contractor_id = contractor.get('Id')
+            if contractor_email and contractor_id:
+                unique_users[contractor_email] = contractor_id
+
+    return unique_users
+
+def map_it_uids_to_gandiva_ids(it_uids: dict, g_users: dict) -> dict:
+    """
+    Maps Yandex user IDs to Gandiva user IDs based on email matching.
+    
+    :param it_uids: Dictionary where keys are Yandex user IDs and values are emails.
+    :param g_users: Dictionary where keys are emails and values are Gandiva user IDs.
+    :return: Dictionary where keys are Yandex user IDs and values are Gandiva user IDs.
+    """
+    mapped_ids = {}
+
+    # Iterate over it_uids and match emails to g_users
+    for yandex_uid, email in it_uids.items():
+        if email in g_users:
+            # Map the Yandex UID to the Gandiva ID
+            gandiva_id = g_users[email]
+            mapped_ids[yandex_uid] = gandiva_id
+
+    return mapped_ids
+
+def extract_task_ids_from_summaries(ya_tasks):
+    """
+    Extracts task IDs from the 'summary' field of each task in ya_tasks and detects duplicates.
+
+    :param ya_tasks: List of task dictionaries containing 'summary' and 'key' fields.
+    :return: A dictionary with task_id as keys and ya_task_key as values.
+    """
+    task_info_dict = {}
+    seen_task_ids = set()  # To track task IDs we've already encountered
+
+    for task in ya_tasks:
+        summary = task.get('summary', '')
+        ya_task_key = task.get('key')  # Extract the 'key' field
+
+        # Use a regex to match the task ID at the start of the summary
+        match = re.match(r'^(\d+)', summary)
+
+        if match:
+            task_id = match.group(1)  # Get the matched task ID
+            
+            if task_id in seen_task_ids:
+                logging.warning(f"Duplicate task ID found: {task_id}")
+            else:
+                task_info_dict[task_id] = ya_task_key
+                seen_task_ids.add(task_id)
+
+    return task_info_dict
+
+def extract_task_ids_from_gandiva_task_id(ya_tasks):
+    """
+    Extracts task IDs from the 'GandivaTaskId' field of each task in ya_tasks and detects duplicates.
+
+    :param ya_tasks: List of task dictionaries containing 'summary' and 'key' fields.
+    :return: A dictionary with task_id as keys and ya_task_key as values.
+    """
+    task_info_dict = {}
+
+    for task in ya_tasks:
+        gandiva_task_id = task.get(yapi.YA_FIELD_ID_GANDIVA_TASK_ID)
+        ya_task_key = task.get('key')  # Extract the 'key' field
+        task_info_dict[gandiva_task_id] = ya_task_key
+
+    return task_info_dict
+
+def find_unmatched_tasks(ya_tasks, extracted_task_ids):
+    """
+    Finds tasks whose IDs could not be extracted from the 'summary' field.
+
+    :param ya_tasks: List of task dictionaries containing 'summary' fields.
+    :param extracted_task_ids: Set of task IDs that were successfully extracted.
+    :return: List of tasks (summaries) that were not found during extraction.
+    """
+    unmatched_tasks = []
+
+    for task in ya_tasks:
+        summary = task.get('summary', '')
+        
+        # Extract the task ID using regex
+        match = re.match(r'^(\d+)', summary)
+        
+        if match:
+            task_id = match.group(1)
+            # If the extracted task ID is not in the set of extracted IDs, add it to the unmatched list
+            if task_id not in extracted_task_ids:
+                unmatched_tasks.append(task)
+        else:
+            # If no task ID was extracted, add it to the unmatched list
+            unmatched_tasks.append(task)
+    
+    return unmatched_tasks
+
+def extract_observers_from_detailed_task(detailed_task: dict) -> list:
+    """
+    Extracts observer IDs from a detailed task.
+
+    :param detailed_task: The detailed task object (a dictionary) which contains an "Observers" field.
+    :return: A list of observer IDs. If no observers are found, returns an empty list.
+    """
+    observers = detailed_task.get("Observers", [])
+    
+    # Extract observer IDs if they exist
+    observer_ids = [observer.get('Id') for observer in observers if 'Id' in observer]
+
+    return observer_ids
+
+import yandex_api as yapi
+import gandiva_api as gapi
+import asyncio    
+async def main():
+    query = 'Resolution: empty() "Status Type": !cancelled "Status Type": !done Queue: TEA "Sort by": Updated DESC'
+    ya_tasks = await yapi.get_all_tasks(query=query)
+    tasks_ids_from_summaries = extract_task_ids_from_summaries(ya_tasks)
+    unmatched_tasks = find_unmatched_tasks(ya_tasks, tasks_ids_from_summaries)
+    pass
+
+
 if __name__ == '__main__':
-    html_comment = '<p>Доработка выполнена в базе Srvr=&quot;192.168.50.226&quot;;Ref=&quot;erp_106&quot;.<br />Техническое описание изменений:<br />1. Расширение САКСЭС<br />1.1. Документ.ЗаказКлиента.ФормаДокумента(2603, 3) - В процедуру &quot;СК_РассчитатьДоставку&quot; добавлены изменения<br />1.2. Документ.ЗаказКлиента.ФормаДокумента(11055, 1) - Добавлена новая процедура &quot;СК_ЗаписьДокументаБезЕгоПроведения&quot;<br />1.3. Документ.ЗаказКлиента.МодульОбъекта(205, 3) - Закомментирован вызов процедуры &quot;СК_ПроверитьЗаполнениеСегментаПартнера&quot;<br />1.4. Документ.ЗаказКлиента.МодульОбъекта(822, 1) - Добавлен вызов процедуры &quot;СК_ПроверитьЗаполнениеСегментаПартнера&quot;</p>'
-    html_comment = '<p><a href=\"/Resources/Attachment/22893ba9-efc9-4971-8471-0cd137f13ad7\">[ Файл: 110634 Разбор ФТ.docx]</a></p><p><a href=\"/Resources/Attachment/f56d10c1-6941-4224-86b7-8a404d0fc058\">[ Файл: 110634 ТЗ Запись нового заказа клиента перед расчетом доставки калькулятором.docx]</a></p>'
-    comment = html_to_yandex_format(html_comment)
+    asyncio.run(main())
+    
