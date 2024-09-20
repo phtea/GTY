@@ -3,6 +3,7 @@ from sqlalchemy import create_engine, Column, String, ForeignKey, Table
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker, Session
 from sqlalchemy.exc import NoResultFound, IntegrityError
 import yandex_api
+import utils
 
 Base = declarative_base()
 
@@ -56,7 +57,7 @@ def get_session(engine):
 
 
 # Functions here
-def get_task_by_gandiva_id(session: Session, task_id_gandiva: str):
+def get_task_by_gandiva_id(session: Session, g_task_id: str):
     """
     Find a task in the database by its Gandiva ID.
 
@@ -65,7 +66,7 @@ def get_task_by_gandiva_id(session: Session, task_id_gandiva: str):
     :return: The Task object if found, otherwise None.
     """
     try:
-        task = session.query(Task).filter_by(task_id_gandiva=task_id_gandiva).one_or_none()
+        task = session.query(Task).filter_by(task_id_gandiva=g_task_id).one_or_none()
         return task
     except NoResultFound:
         return None
@@ -91,32 +92,34 @@ def update_database_schema(engine):
     # Recreate the tables with the new schema
     Base.metadata.create_all(engine)
 
-def add_task_no_commit(session: Session, task_data: dict):
+def add_task_no_commit(session: Session, y_task: dict):
     """
     Add a single task to the database or update it if it exists.
     :param session: SQLAlchemy session object.
     :param task_data: Dictionary containing 'key' (task_id_yandex) and YA_FIELD_ID_GANDIVA_TASK_ID (task_id_gandiva).
     :return: None
     """
-    task_id_yandex = task_data.get('key')
-    task_id_gandiva = task_data.get(yandex_api.YA_FIELD_ID_GANDIVA_TASK_ID)
+    y_task_id         = y_task.get('key')
+    g_task_id         = y_task.get(yandex_api.YA_FIELD_ID_GANDIVA_TASK_ID)
+    summary           = y_task.get('summary')
+    g_task_id_summary = utils.extract_task_id_from_summary(summary)
     
-    if not task_id_gandiva:
-        logging.warning(f"No Gandiva ID found for Yandex task {task_id_yandex}, skipping.")
+    if not (g_task_id or g_task_id_summary):
+        logging.debug(f"No Gandiva ID found for Yandex task {y_task_id}, skipping.")
         return
-
+    g_task_id = g_task_id_summary
     # Check if the task already exists by task_id_yandex
-    existing_task = session.query(Task).filter_by(task_id_yandex=task_id_yandex).one_or_none()
+    existing_task = session.query(Task).filter_by(task_id_yandex=y_task_id).one_or_none()
 
     if not existing_task:
         # If the task doesn't exist, create a new task and add it to the session
-        new_task = Task(task_id_yandex=task_id_yandex, task_id_gandiva=task_id_gandiva)
+        new_task = Task(task_id_yandex=y_task_id, task_id_gandiva=g_task_id)
         session.add(new_task)
-        logging.info(f"Task {task_id_yandex} added to the database.")
+        logging.info(f"Task {y_task_id} added to the database.")
     else:
-        logging.debug(f"Task {task_id_yandex} already exists in the database.")
+        logging.debug(f"Task {y_task_id} already exists in the database.")
 
-def add_tasks(session: Session, tasks: list):
+def add_tasks(session: Session, y_tasks: list):
     """
     Add a list of tasks to the database by calling `add_task` for each task.
     :param session: SQLAlchemy session object.
@@ -125,8 +128,8 @@ def add_tasks(session: Session, tasks: list):
     """
     total_tasks = 0
 
-    for task_data in tasks:
-        add_task_no_commit(session, task_data)  # Call the add_task function for each task
+    for y_task in y_tasks:
+        add_task_no_commit(session, y_task)  # Call the add_task function for each task
         total_tasks += 1
 
     # Commit the changes to the database
@@ -142,15 +145,15 @@ def add_user_department_mapping(session: Session, department_user_mapping: dict)
     """
     total_entries = 0
 
-    for department_name, user_id in department_user_mapping.items():
+    for department_name, y_user_id in department_user_mapping.items():
         # Check if the user exists in the database
-        user = session.query(User).filter_by(yandex_user_id=user_id).one_or_none()
+        user = session.query(User).filter_by(yandex_user_id=y_user_id).one_or_none()
 
         if not user:
             # If the user doesn't exist, create and add a new user
-            user = User(yandex_user_id=user_id)
+            user = User(yandex_user_id=y_user_id)
             session.add(user)
-            logging.info(f"User {user_id} added to the database.")
+            logging.info(f"User {y_user_id} added to the database.")
 
         # Check if the department exists in the database
         department = session.query(Department).filter_by(department_name=department_name).one_or_none()
@@ -163,15 +166,15 @@ def add_user_department_mapping(session: Session, department_user_mapping: dict)
 
         # Check if the relationship between the user and department already exists
         user_department = session.query(UserDepartment).filter_by(
-            yandex_user_id=user_id,
+            yandex_user_id=y_user_id,
             department_name=department_name
         ).one_or_none()
 
         if not user_department:
             # If the relationship doesn't exist, create it
-            user_department = UserDepartment(yandex_user_id=user_id, department_name=department_name)
+            user_department = UserDepartment(yandex_user_id=y_user_id, department_name=department_name)
             session.add(user_department)
-            logging.info(f"User {user_id} assigned to department {department_name}.")
+            logging.info(f"User {y_user_id} assigned to department {department_name}.")
 
         total_entries += 1
 
@@ -208,29 +211,29 @@ def add_or_update_user(session: Session, user_data: dict):
     :param user_data: Dictionary where keys are yandex_user_id and values are gandiva_user_id.
                       Example: {2332300: 60, ...}
     """
-    for yandex_user_id, gandiva_user_id in user_data.items():
+    for y_user_id, g_user_id in user_data.items():
         try:
             # Check if the user exists by yandex_user_id
-            user = session.query(User).filter_by(yandex_user_id=str(yandex_user_id)).one_or_none()
+            user = session.query(User).filter_by(yandex_user_id=str(y_user_id)).one_or_none()
 
             if user:
                 # If the user exists but gandiva_user_id is empty or None, update it
                 if not user.gandiva_user_id:
-                    user.gandiva_user_id = str(gandiva_user_id)
+                    user.gandiva_user_id = str(g_user_id)
                     session.commit()
-                    logging.info(f"Updated user {yandex_user_id} with Gandiva ID {gandiva_user_id}.")
+                    logging.info(f"Updated user {y_user_id} with Gandiva ID {g_user_id}.")
                 else:
-                    logging.debug(f"User {yandex_user_id} already exists with Gandiva ID {user.gandiva_user_id}. No update required.")
+                    logging.debug(f"User {y_user_id} already exists with Gandiva ID {user.gandiva_user_id}. No update required.")
             else:
                 # If the user doesn't exist, create a new user
-                new_user = User(yandex_user_id=str(yandex_user_id), gandiva_user_id=str(gandiva_user_id))
+                new_user = User(yandex_user_id=str(y_user_id), gandiva_user_id=str(g_user_id))
                 session.add(new_user)
                 session.commit()
-                logging.info(f"Added new user {yandex_user_id} with Gandiva ID {gandiva_user_id}.")
+                logging.info(f"Added new user {y_user_id} with Gandiva ID {g_user_id}.")
 
         except Exception as e:
             session.rollback()
-            logging.error(f"Error adding or updating user {yandex_user_id}: {str(e)}")
+            logging.error(f"Error adding or updating user {y_user_id}: {str(e)}")
 
 def add_or_update_task(session: Session, g_task_id: str, y_task_id: str):
     """
@@ -264,7 +267,7 @@ def add_or_update_task(session: Session, g_task_id: str, y_task_id: str):
         logging.error(f"Error adding or updating task {y_task_id}: {e}")
         session.rollback()
 
-def get_user_by_yandex_id(session: Session, yandex_user_id: str):
+def get_user_by_yandex_id(session: Session, y_user_id: str):
     """
     Retrieves a user from the database by their Yandex user ID.
 
@@ -273,16 +276,16 @@ def get_user_by_yandex_id(session: Session, yandex_user_id: str):
     :return: The User object if found, otherwise None.
     """
     try:
-        user = session.query(User).filter_by(yandex_user_id=str(yandex_user_id)).one_or_none()
+        user = session.query(User).filter_by(yandex_user_id=str(y_user_id)).one_or_none()
         return user
     except NoResultFound:
-        logging.warning(f"No user found with Yandex user ID {yandex_user_id}.")
+        logging.warning(f"No user found with Yandex user ID {y_user_id}.")
         return None
     except Exception as e:
-        logging.error(f"Error retrieving user by Yandex ID {yandex_user_id}: {str(e)}")
+        logging.error(f"Error retrieving user by Yandex ID {y_user_id}: {str(e)}")
         return None
 
-def get_user_by_gandiva_id(session: Session, gandiva_user_id: str):
+def get_user_by_gandiva_id(session: Session, g_user_id: str):
     """
     Retrieves a user from the database by their Gandiva user ID.
 
@@ -291,13 +294,13 @@ def get_user_by_gandiva_id(session: Session, gandiva_user_id: str):
     :return: The User object if found, otherwise None.
     """
     try:
-        user = session.query(User).filter_by(gandiva_user_id=str(gandiva_user_id)).one_or_none()
+        user = session.query(User).filter_by(gandiva_user_id=str(g_user_id)).one_or_none()
         return user
     except NoResultFound:
-        logging.debug(f"No user found with Gandiva user ID {gandiva_user_id}.")
+        logging.debug(f"No user found with Gandiva user ID {g_user_id}.")
         return None
     except Exception as e:
-        logging.error(f"Error retrieving user by Gandiva ID {gandiva_user_id}: {str(e)}")
+        logging.error(f"Error retrieving user by Gandiva ID {g_user_id}: {str(e)}")
         return None
 
 def convert_gandiva_observers_to_yandex_followers(session, gandiva_observers: list[int]) -> list[int]:

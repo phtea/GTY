@@ -22,6 +22,7 @@ MAX_CONCURRENT_REQUESTS = config.getint('Gandiva', 'max_concurrent_requests')
 class GroupsOfStatuses:
     in_progress = [3, 4, 6, 8, 10, 11, 12, 13]
     finished = [5, 7, 9]
+    _all = [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
 
 
 
@@ -80,11 +81,11 @@ async def get_access_token(username, password):
     }
 
     # Use make_http_request to send the POST request
-    response_json = await make_http_request("POST", url, headers=headers, body=body)
+    response = await make_http_request("POST", url, headers=headers, body=body)
 
-    if response_json:
-        access_token = response_json.get('access_token')
-        refresh_token = response_json.get('refresh_token')
+    if response:
+        access_token = response.get('access_token')
+        refresh_token = response.get('refresh_token')
 
         # Update global tokens
         global GAND_ACCESS_TOKEN
@@ -116,11 +117,11 @@ async def refresh_access_token(refresh_token):
     }
 
     # Use make_http_request to send the POST request
-    response_json = await make_http_request("POST", url, headers=headers, body=body)
+    response = await make_http_request("POST", url, headers=headers, body=body)
 
-    if response_json:
-        access_token = response_json.get('access_token')
-        refresh_token = response_json.get('refresh_token')
+    if response:
+        access_token = response.get('access_token')
+        refresh_token = response.get('refresh_token')
 
         # Update global tokens and environment variables
         global GAND_ACCESS_TOKEN
@@ -144,31 +145,31 @@ def get_headers(content_type="application/json"):
 
 # Functions
 
-async def get_task_by_id(request_id):
+async def get_task_by_id(g_task_id):
     """Fetch a task by ID using the GAND API."""
     content_type = "application/x-www-form-urlencoded"
-    url = f"{HOST}/api/Requests/{request_id}"
+    url = f"{HOST}/api/Requests/{g_task_id}"
 
     return await make_http_request('GET', url, headers=get_headers(content_type=content_type))
 
-async def get_department_by_user_id(user_id):
+async def get_department_by_user_id(g_user_id):
     """Fetch department by user ID with caching."""
-    if user_id in user_department_cache:
-        logging.debug(f"Returning cached department for user {user_id}")
-        return user_department_cache[user_id]
+    if g_user_id in user_department_cache:
+        logging.debug(f"Returning cached department for user {g_user_id}")
+        return user_department_cache[g_user_id]
 
-    url = f"{HOST}/api/Users/{user_id}"
+    url = f"{HOST}/api/Users/{g_user_id}"
     headers = get_headers(content_type="application/x-www-form-urlencoded")
 
     response_json = await make_http_request('GET', url, headers=headers)
 
     if response_json:
         department = response_json.get("Department")
-        user_department_cache[user_id] = department  # Cache the department
-        logging.debug(f"Successfully gathered department for user {user_id}")
+        user_department_cache[g_user_id] = department  # Cache the department
+        logging.debug(f"Successfully gathered department for user {g_user_id}")
         return department
 
-    logging.error(f"Error fetching department for user {user_id}")
+    logging.error(f"Error fetching department for user {g_user_id}")
     return None
         
 async def get_departments_for_users(user_ids):
@@ -195,26 +196,22 @@ async def get_page_of_tasks(page_number: int, statuses: list[int]):
         "Descending": False
     }
 
-    response_json = await make_http_request(
-        method="POST", 
-        url=url, 
-        headers=get_headers(content_type="application/json"), 
-        body=json.dumps(body)
-    )
+    response = await make_http_request(method="POST", url=url, 
+        headers=get_headers(content_type="application/json"), body=json.dumps(body))
 
-    if response_json:
+    if response:
         logging.debug(f"Page {page_number} fetched.")
-        return response_json
+        return response
     else:
         logging.error(f"Failed to fetch page {page_number}")
         return None
 
 # Define the function to get comments for a specific task
 @retry_async(max_retries=3, cooldown=5)
-async def get_task_comments(task_id):
+async def get_task_comments(g_task_id):
     """Fetch comments for a specific task."""
 
-    url = f"{HOST}/api/Requests/{task_id}/Comments"
+    url = f"{HOST}/api/Requests/{g_task_id}/Comments"
     
     response_json = await make_http_request(
         method="GET", 
@@ -223,14 +220,14 @@ async def get_task_comments(task_id):
     )
 
     if response_json or response_json == []:
-        logging.debug(f"Found {len(response_json)} comments for task {task_id}.")
+        logging.debug(f"Found {len(response_json)} comments for task {g_task_id}.")
         return response_json
     else:
-        logging.error(f"Failed to fetch comments for task {task_id}")
+        logging.error(f"Failed to fetch comments for task {g_task_id}")
         return None
 
 # Define the function to get comments for a list of task IDs with concurrency control
-async def get_comments_for_tasks_concurrently(task_ids: list[int]):
+async def get_comments_for_tasks_concurrently(g_task_ids: list[int]):
     """Fetch comments for a list of tasks with a limit on concurrent requests."""
     task_comments = {}
     max_concurrent_requests = MAX_CONCURRENT_REQUESTS if MAX_CONCURRENT_REQUESTS else 5
@@ -243,7 +240,7 @@ async def get_comments_for_tasks_concurrently(task_ids: list[int]):
             return task_id, comments
 
     # Create a list of tasks
-    tasks = [fetch_comments(task_id) for task_id in task_ids]
+    tasks = [fetch_comments(task_id) for task_id in g_task_ids]
 
     # Run all tasks concurrently while respecting the semaphore
     responses = await asyncio.gather(*tasks)
@@ -255,11 +252,11 @@ async def get_comments_for_tasks_concurrently(task_ids: list[int]):
     return task_comments
 
 # Define the function to get comments for a list of task IDs consecutively
-async def get_comments_for_tasks_consecutively(task_ids: list[int]):
+async def get_comments_for_tasks_consecutively(g_task_ids: list[int]):
     """Fetch comments for a list of tasks one at a time."""
     task_comments = {}
 
-    for task_id in task_ids:
+    for task_id in g_task_ids:
         comments = await get_task_comments(task_id)
         task_comments[task_id] = comments
 

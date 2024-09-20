@@ -28,7 +28,7 @@ def setup_logging():
     # Set logging level
     logging.getLogger().setLevel(logging.INFO)
 
-def group_tasks_by_status(gandiva_tasks: list, yandex_tasks: list, to_filter: bool = True) -> dict:
+def group_tasks_by_status(g_tasks: list, y_tasks: list, to_filter: bool = True) -> dict:
     """
     Groups tasks by their current Gandiva status, with an option to filter tasks where 
     the Gandiva task has transitioned to a new status compared to the Yandex task.
@@ -44,13 +44,13 @@ def group_tasks_by_status(gandiva_tasks: list, yandex_tasks: list, to_filter: bo
     """
     grouped_tasks = {}
 
-    for g_task in gandiva_tasks:
+    for g_task in g_tasks:
         # Step 1: Get the Gandiva task ID and status
         g_task_id = g_task['Id']
         g_status = g_task['Status']
 
         # Step 2: Get the Yandex task based on Gandiva task ID
-        y_task = next((task for task in yandex_tasks if task.get(yapi.YA_FIELD_ID_GANDIVA_TASK_ID) == str(g_task_id)), None)
+        y_task = next((task for task in y_tasks if task.get(yapi.YA_FIELD_ID_GANDIVA_TASK_ID) == str(g_task_id)), None)
         if not y_task:
             continue
 
@@ -411,6 +411,22 @@ def map_it_uids_to_gandiva_ids(it_uids: dict, g_users: dict) -> dict:
 
     return mapped_ids
 
+def extract_task_id_from_summary(summary):
+    """
+    Extracts a task ID from a single summary string.
+
+    :param summary: A string containing the task summary.
+    :return: The extracted task ID, or None if no match is found.
+    """
+    # Use a regex to match the task ID at the start of the summary
+    match = re.match(r'^(\d+)', summary)
+    
+    if match:
+        return match.group(1)  # Return the matched task ID
+    else:
+        return None
+
+
 def extract_task_ids_from_summaries(ya_tasks):
     """
     Extracts task IDs from the 'summary' field of each task in ya_tasks and detects duplicates.
@@ -425,12 +441,10 @@ def extract_task_ids_from_summaries(ya_tasks):
         summary = task.get('summary', '')
         ya_task_key = task.get('key')  # Extract the 'key' field
 
-        # Use a regex to match the task ID at the start of the summary
-        match = re.match(r'^(\d+)', summary)
+        # Extract the task ID from the summary
+        task_id = extract_task_id_from_summary(summary)
 
-        if match:
-            task_id = match.group(1)  # Get the matched task ID
-            
+        if task_id:
             if task_id in seen_task_ids:
                 logging.warning(f"Duplicate task ID found: {task_id}")
             else:
@@ -496,6 +510,19 @@ def extract_observers_from_detailed_task(detailed_task: dict) -> list:
     observer_ids = [observer.get('Id') for observer in observers if 'Id' in observer]
 
     return observer_ids
+
+def task_exists_in_list(g_tasks, task_id):
+    """
+    Check if a task with the specified ID exists in the list of tasks.
+    
+    :param g_tasks: List of task dictionaries, each containing an 'Id' field.
+    :param task_id: The task ID to search for.
+    :return: True if the task exists, False otherwise.
+    """
+    for task in g_tasks:
+        if task.get('Id') == task_id:
+            return True
+    return False
 
 import yandex_api as yapi
 import gandiva_api as gapi
