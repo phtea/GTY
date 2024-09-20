@@ -50,7 +50,7 @@ def group_tasks_by_status(gandiva_tasks: list, yandex_tasks: list, to_filter: bo
         g_status = g_task['Status']
 
         # Step 2: Get the Yandex task based on Gandiva task ID
-        y_task = next((task for task in yandex_tasks if task.get('unique') == str(g_task_id)), None)
+        y_task = next((task for task in yandex_tasks if task.get(yapi.YA_FIELD_ID_GANDIVA_TASK_ID) == str(g_task_id)), None)
         if not y_task:
             continue
 
@@ -451,6 +451,7 @@ def extract_task_ids_from_gandiva_task_id(ya_tasks):
     for task in ya_tasks:
         gandiva_task_id = task.get(yapi.YA_FIELD_ID_GANDIVA_TASK_ID)
         ya_task_key = task.get('key')  # Extract the 'key' field
+        if not gandiva_task_id: continue
         task_info_dict[gandiva_task_id] = ya_task_key
 
     return task_info_dict
@@ -505,6 +506,7 @@ async def main():
     tasks_ids_from_summaries = extract_task_ids_from_summaries(ya_tasks)
     unmatched_tasks = find_unmatched_tasks(ya_tasks, tasks_ids_from_summaries)
     pass
+
 
 
 if __name__ == '__main__':

@@ -12,10 +12,11 @@ config = configparser.ConfigParser()
 config.read(CONFIG_PATH)
 
 # Globals
-DB_URL      = config.get('Database', 'url')
+DB_URL              = config.get('Database', 'url')
 # Create the database and tables
-DB_ENGINE   = db.create_database(DB_URL)
-DB_SESSION  = db.get_session(DB_ENGINE)
+DB_ENGINE           = db.create_database(DB_URL)
+DB_SESSION          = db.get_session(DB_ENGINE)
+TEST_ON_FEW_TASKS   = True
 
 async def sync_comments(g_tasks, sync_mode: int, get_comments_execution: str):
     """
@@ -115,7 +116,7 @@ async def sync_comments(g_tasks, sync_mode: int, get_comments_execution: str):
     logging.info(f"Total comments added: {added_comment_count}")
     logging.info(f"Total comments edited: {edited_comment_count}")
 
-async def sync_services(queue: str, sync_mode: str, board_id: int, to_get_followers: bool):
+async def sync_services(queue: str, sync_mode: str, board_id: int, to_get_followers: bool, use_summaries: bool):
     """
     Synchronize Gandiva and Yandex Tracker services.
     queue: working queue in Yandex Tracker.
@@ -127,6 +128,17 @@ async def sync_services(queue: str, sync_mode: str, board_id: int, to_get_follow
     await yapi.check_access_token(yapi.YA_ACCESS_TOKEN)
     await gapi.get_access_token(gapi.GAND_LOGIN, gapi.GAND_PASSWORD)
     g_tasks = await gapi.get_all_tasks(gapi.GroupsOfStatuses.in_progress)
+    if TEST_ON_FEW_TASKS:
+        found_task_id   = 190069
+        found_task      = None
+        for task in g_tasks:
+            if task['Id'] == found_task_id:
+                found_task = task
+                break
+        g_tasks = g_tasks[:3]
+        g_tasks.append(found_task)
+    # TODO: remove!
+
     # ++
     # ya_tasks = await yapi.get_all_tasks(queue)
     query = f'Resolution: empty() "Status Type": !cancelled "Status Type": !done Queue: {queue} "Sort by": Updated DESC'
@@ -138,12 +150,17 @@ async def sync_services(queue: str, sync_mode: str, board_id: int, to_get_follow
     not_closed_task_ids_2 = utils.extract_task_ids_from_gandiva_task_id(ya_tasks)
     not_closed_task_ids.update(not_closed_task_ids_2)
     
-    await yapi.add_tasks(g_tasks, queue=queue, non_closed_ya_task_ids=not_closed_task_ids)
+    # NOTE: uncomment to add new tasks
+    # await yapi.add_tasks(g_tasks, queue=queue, non_closed_ya_task_ids=not_closed_task_ids)
     
-    await yapi.edit_tasks(g_tasks, ya_tasks, to_get_followers)
+    await yapi.edit_tasks(g_tasks, ya_tasks, to_get_followers, use_summaries)
     await yapi.batch_move_tasks_status(g_tasks, ya_tasks)
 
     g_finished_tasks = await gapi.get_all_tasks(gapi.GroupsOfStatuses.finished)
+    if TEST_ON_FEW_TASKS:
+        g_finished_tasks = g_finished_tasks[:3]
+        g_finished_tasks.append(found_task)
+    
     await yapi.batch_move_tasks_status(g_finished_tasks, ya_tasks)
 
     await sync_comments(g_tasks, sync_mode, 'async')
@@ -152,11 +169,12 @@ async def sync_services(queue: str, sync_mode: str, board_id: int, to_get_follow
     logging.info("Sync finished successfully!")
 
 
-async def run_sync_services_periodically(queue: str, sync_mode: int, board_id: int, to_get_followers: int,  interval_minutes: int = 30):
+async def run_sync_services_periodically(queue: str, sync_mode: int, board_id: int, to_get_followers: bool = False,
+                                         use_summaries: bool = False, interval_minutes: int = 30):
     """Runs sync_services every interval_minutes."""
     while True:
         try:
-            await sync_services(queue, sync_mode, board_id, to_get_followers)  # Call sync_services
+            await sync_services(queue, sync_mode, board_id, to_get_followers, use_summaries)  # Call sync_services
         except Exception as e:
             # Log any error that happens in sync_services
             logging.error(f"Error during sync_services: {e}")
@@ -196,19 +214,22 @@ async def main():
     try:
         sync_mode = config.getint('Settings', 'sync_mode')
         to_get_followers = config.getboolean('Settings', 'to_get_followers')
+        use_summaries = config.getboolean('Settings', 'use_summaries')
         queue = config.get('Settings', 'queue')
         board_id = config.getint('Settings', 'board_id')
         interval_minutes = config.getint('Settings', 'interval_minutes')
     except Exception as e:  # Catch any exception
         logging.warning(f"Error fetching config values: {e}. Using default values.")
+        use_summaries = False
+        to_get_followers = False
         sync_mode = 1
         queue = "TEA"
         board_id = 52
         interval_minutes = 5
     await update_db(queue)
     # Start sync_services in the background and run every N minutes
-    logging.info(f"Settings used in config:\nsync_mode: {sync_mode}\nqueue: {queue}\nboard_id: {board_id}\ninterval_minutes: {interval_minutes}")
-    await run_sync_services_periodically(queue, sync_mode, board_id, to_get_followers, interval_minutes=interval_minutes)
+    logging.info(f"Settings used in config:\nsync_mode: {sync_mode}\nqueue: {queue}\nboard_id: {board_id}\nto_get_followers: {to_get_followers}\nuse_summaries: {use_summaries}\ninterval_minutes: {interval_minutes}")
+    await run_sync_services_periodically(queue, sync_mode, board_id, to_get_followers, use_summaries=use_summaries, interval_minutes=interval_minutes)
 
 async def update_db(queue):
     await yapi.check_access_token(yapi.YA_ACCESS_TOKEN)

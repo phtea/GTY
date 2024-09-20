@@ -8,6 +8,7 @@ from utils import make_http_request
 import configparser
 import db_module as db
 import urllib.parse
+import re
 
 # Path to the .ini file
 CONFIG_PATH = 'config.ini'
@@ -359,7 +360,7 @@ async def get_tasks_by_gandiva_ids(gandiva_ids: list[str]) -> dict:
 
     # Initialize the request body
     body = {
-        "filter": {"unique": gandiva_ids}
+        "filter": {YA_FIELD_ID_GANDIVA_TASK_ID: gandiva_ids}
     }
 
     # Convert the body to a JSON string
@@ -478,7 +479,7 @@ async def add_task(task_id_gandiva,
         task_id_yandex = response_json.get('key')
         if task_id_yandex:
             # Add task to the database
-            db.add_or_update_task(session=DB_SESSION, task_id_gandiva=task_id_gandiva, task_id_yandex=task_id_yandex)
+            db.add_or_update_task(session=DB_SESSION, g_task_id=task_id_gandiva, y_task_id=task_id_yandex)
             return response_json
         else:
             logging.error(f"Failed to retrieve task key from response for task {task_id_gandiva}")
@@ -501,7 +502,7 @@ async def add_tasks(tasks_gandiva: list[dict], queue: str, non_closed_ya_task_id
         gandiva_task_id = str(task['Id'])
         if gandiva_task_id in non_closed_ya_task_ids.keys():
             logging.debug(f"Task {gandiva_task_id} already exists.")
-            db.add_or_update_task(session=DB_SESSION, task_id_gandiva=gandiva_task_id, task_id_yandex=non_closed_ya_task_ids[gandiva_task_id])
+            db.add_or_update_task(session=DB_SESSION, g_task_id=gandiva_task_id, y_task_id=non_closed_ya_task_ids[gandiva_task_id])
             continue
 
         fields = await convert_gandiva_to_yandex_fields(task, edit=False)
@@ -573,7 +574,7 @@ async def update_task_if_needed(task_yandex, gandiva_task_id, initiator_name, in
 
     # If any field needs to be edited, call the edit function
     if any(edit_fields.values()):
-        await edit_task(
+        response_json = await edit_task(
             task_id_yandex      =task_id_yandex,
             initiator_name      =edit_fields['edit_initiator_name'],
             initiator_department=edit_fields['edit_initiator_department'],
@@ -583,12 +584,45 @@ async def update_task_if_needed(task_yandex, gandiva_task_id, initiator_name, in
             assignee_id_yandex  =edit_fields['edit_assignee_yandex_id'],
             followers           =edit_fields['edit_followers'],
             gandiva_task_id     =edit_fields['edit_gandiva_task_id'])
-        return True  # Return True to indicate the task was edited
+        if response_json:
+             # Return True to indicate the task was edited
+            return True
+        else:
+            return False
     else:
         logging.debug(f"Task {gandiva_task_id} is already up-to-date.")
         return False
 
-async def edit_tasks(tasks_gandiva, ya_tasks, to_get_followers):
+def create_ya_tasks_dict(ya_tasks, use_summaries):
+    """
+    Creates a dictionary to map Yandex task unique IDs to their corresponding task objects.
+    If `use_summaries` is True, it maps based on task IDs scraped from summaries.
+    If `use_summaries` is False, it maps based on YA_FIELD_ID_GANDIVA_TASK_ID.
+
+    :param ya_tasks: List of Yandex task objects.
+    :param use_summaries: Whether to use task summaries to map task IDs.
+    :return: Dictionary with task IDs as keys and Yandex task objects as values.
+    """
+    ya_tasks_dict = {}
+
+    if use_summaries:
+        # Map based on task IDs extracted from summaries
+        for task in ya_tasks:
+            summary = task.get('summary', '')
+            ya_task_key = task.get('key')  # Extract the 'key' field
+            
+            # Use regex to extract the task ID at the start of the summary
+            match = re.match(r'^(\d+)', summary)
+            if match:
+                task_id = match.group(1)  # Get the matched task ID
+                ya_tasks_dict[task_id] = task  # Map task_id to task object
+    else:
+        # Map based on YA_FIELD_ID_GANDIVA_TASK_ID
+        ya_tasks_dict = {yt[YA_FIELD_ID_GANDIVA_TASK_ID]: yt for yt in ya_tasks if yt.get(YA_FIELD_ID_GANDIVA_TASK_ID)}
+
+    return ya_tasks_dict
+
+async def edit_tasks(tasks_gandiva, ya_tasks, to_get_followers, use_summaries=False):
     """
     Edits tasks in Yandex Tracker based on the data from Gandiva.
     Only updates tasks that are outdated.
@@ -596,28 +630,33 @@ async def edit_tasks(tasks_gandiva, ya_tasks, to_get_followers):
     logging.info(f"Editing tasks...")
     
     # Create a dictionary to map Yandex task unique IDs to their corresponding task objects
-    ya_tasks_dict = {yt['unique']: yt for yt in ya_tasks if yt.get('unique')}
+    ya_tasks_dict = create_ya_tasks_dict(ya_tasks=ya_tasks, use_summaries=use_summaries)
     
     # Initialize a counter for edited tasks
     edited_task_count = 0
 
     for task in tasks_gandiva:
+        g_task_id         = str(task['Id'])
+        
+        # Find the corresponding Yandex task using the dictionary
+        y_task = ya_tasks_dict.get(g_task_id)
+        if not y_task: continue
+
         fields = await convert_gandiva_to_yandex_fields(task, edit=True, to_get_followers=to_get_followers)
         initiator_name          = fields.get('initiator_name')
         initiator_department    = fields.get('initiator_department')
         description             = fields.get('description')
-        gandiva_task_id         = fields.get('gandiva_task_id')
-        yandex_start_date       = fields.get('yandex_start_date')
-        assignee_yandex_id      = fields.get('assignee_id_yandex')
+        y_start_date       = fields.get('yandex_start_date')
+        y_assignee_id      = fields.get('assignee_id_yandex')
         followers               = fields.get('followers')
 
 
-        # Find the corresponding Yandex task using the dictionary
-        task_yandex = ya_tasks_dict.get(gandiva_task_id)
+       
 
-        if not task_yandex: continue
-        if await update_task_if_needed(task_yandex, gandiva_task_id, initiator_name, initiator_department, description, yandex_start_date, assignee_yandex_id, followers):
+        if await update_task_if_needed(y_task, g_task_id, initiator_name, initiator_department, description, y_start_date, y_assignee_id, followers):
             edited_task_count += 1
+            y_task_id = y_task['key']
+            db.add_or_update_task(session=DB_SESSION, g_task_id=g_task_id, y_task_id=y_task_id)
 
     # Log the total number of edited tasks
     logging.info(f"Total tasks edited: {edited_task_count}")
@@ -777,13 +816,17 @@ async def batch_edit_tasks(values: dict, task_ids: list):
         logging.error("Failed to perform bulk change.")
         return None
 
+def filter_tasks_with_gandiva_task_id(tasks):
+    """Filters and returns only the tasks that contain the YA_FIELD_ID_GANDIVA_TASK_ID key."""
+    return [task for task in tasks if YA_FIELD_ID_GANDIVA_TASK_ID in task]
+
 def filter_tasks_with_unique(tasks):
     """Filters and returns only the tasks that contain the 'unique' key."""
     return [task for task in tasks if 'unique' in task]
 
 async def add_existing_tracker_tasks_to_db():
     res = await get_all_tasks()
-    res = filter_tasks_with_unique(res)
+    res = filter_tasks_with_gandiva_task_id(res)
     db.add_tasks(session=DB_SESSION, tasks=res)
 
 async def get_sprints_on_board(board_id: str) -> dict:

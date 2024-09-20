@@ -2,6 +2,7 @@ import logging
 from sqlalchemy import create_engine, Column, String, ForeignKey, Table
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker, Session
 from sqlalchemy.exc import NoResultFound, IntegrityError
+import yandex_api
 
 Base = declarative_base()
 
@@ -90,38 +91,47 @@ def update_database_schema(engine):
     # Recreate the tables with the new schema
     Base.metadata.create_all(engine)
 
+def add_task_no_commit(session: Session, task_data: dict):
+    """
+    Add a single task to the database or update it if it exists.
+    :param session: SQLAlchemy session object.
+    :param task_data: Dictionary containing 'key' (task_id_yandex) and YA_FIELD_ID_GANDIVA_TASK_ID (task_id_gandiva).
+    :return: None
+    """
+    task_id_yandex = task_data.get('key')
+    task_id_gandiva = task_data.get(yandex_api.YA_FIELD_ID_GANDIVA_TASK_ID)
+    
+    if not task_id_gandiva:
+        logging.warning(f"No Gandiva ID found for Yandex task {task_id_yandex}, skipping.")
+        return
+
+    # Check if the task already exists by task_id_yandex
+    existing_task = session.query(Task).filter_by(task_id_yandex=task_id_yandex).one_or_none()
+
+    if not existing_task:
+        # If the task doesn't exist, create a new task and add it to the session
+        new_task = Task(task_id_yandex=task_id_yandex, task_id_gandiva=task_id_gandiva)
+        session.add(new_task)
+        logging.info(f"Task {task_id_yandex} added to the database.")
+    else:
+        logging.debug(f"Task {task_id_yandex} already exists in the database.")
+
 def add_tasks(session: Session, tasks: list):
     """
-    Add a list of tasks to the database. Each task should have the structure:
-    {'key': <task_id_yandex>, 'unique': <task_id_gandiva>}
-
+    Add a list of tasks to the database by calling `add_task` for each task.
     :param session: SQLAlchemy session object.
-    :param tasks: A list of task dictionaries where 'key' is task_id_yandex and 'unique' is task_id_gandiva.
+    :param tasks: A list of task dictionaries where 'key' is task_id_yandex and YA_FIELD_ID_GANDIVA_TASK_ID is task_id_gandiva.
     :return: None
     """
     total_tasks = 0
+
     for task_data in tasks:
-        task_id_yandex = task_data.get('key')
-        task_id_gandiva = task_data.get('unique')
-        if not task_id_gandiva:
-            continue
-
-        # Check if the task already exists by task_id_yandex
-        existing_task = session.query(Task).filter_by(task_id_yandex=task_id_yandex).one_or_none()
-
-        if not existing_task:
-            # If the task doesn't exist, create a new task and add it to the session
-            new_task = Task(task_id_yandex=task_id_yandex, task_id_gandiva=task_id_gandiva)
-            session.add(new_task)
-            logging.info(f"Task {task_id_yandex} added to the database.")
-        else:
-            logging.debug(f"Task {task_id_yandex} already exists in the database.")
-        
+        add_task_no_commit(session, task_data)  # Call the add_task function for each task
         total_tasks += 1
 
     # Commit the changes to the database
     session.commit()
-    logging.info(f"{total_tasks} tasks in the database.")
+    logging.info(f"{total_tasks} tasks added/updated in the database.")
 
 def add_user_department_mapping(session: Session, department_user_mapping: dict):
     """
@@ -222,7 +232,7 @@ def add_or_update_user(session: Session, user_data: dict):
             session.rollback()
             logging.error(f"Error adding or updating user {yandex_user_id}: {str(e)}")
 
-def add_or_update_task(session: Session, task_id_gandiva: str, task_id_yandex: str):
+def add_or_update_task(session: Session, g_task_id: str, y_task_id: str):
     """
     Adds a new task if it doesn't exist, otherwise updates the existing one.
 
@@ -232,26 +242,26 @@ def add_or_update_task(session: Session, task_id_gandiva: str, task_id_yandex: s
     """
     try:
         # Check if the task already exists
-        existing_task = session.query(Task).filter_by(task_id_yandex=task_id_yandex).one_or_none()
+        existing_task = session.query(Task).filter_by(task_id_yandex=y_task_id).one_or_none()
 
         if existing_task:
             # If the task exists, update the Gandiva task ID if needed
-            if existing_task.task_id_gandiva != task_id_gandiva:
-                existing_task.task_id_gandiva = task_id_gandiva
-                logging.info(f"Task {task_id_yandex} updated in the database with Gandiva ID {task_id_gandiva}.")
+            if existing_task.task_id_gandiva != g_task_id:
+                existing_task.task_id_gandiva = g_task_id
+                logging.info(f"Task {y_task_id} updated in the database with Gandiva ID {g_task_id}.")
             else:
-                logging.debug(f"Task {task_id_yandex} already up-to-date.")
+                logging.debug(f"Task {y_task_id} already up-to-date.")
         else:
             # If the task doesn't exist, add a new one
-            new_task = Task(task_id_yandex=task_id_yandex, task_id_gandiva=task_id_gandiva)
+            new_task = Task(task_id_yandex=y_task_id, task_id_gandiva=g_task_id)
             session.add(new_task)
-            logging.info(f"Task {task_id_yandex} added to the database.")
+            logging.info(f"Task {y_task_id} added to the database.")
 
         # Commit the changes
         session.commit()
 
     except IntegrityError as e:
-        logging.error(f"Error adding or updating task {task_id_yandex}: {e}")
+        logging.error(f"Error adding or updating task {y_task_id}: {e}")
         session.rollback()
 
 def get_user_by_yandex_id(session: Session, yandex_user_id: str):
