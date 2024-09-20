@@ -16,7 +16,8 @@ DB_URL              = config.get('Database', 'url')
 # Create the database and tables
 DB_ENGINE           = db.create_database(DB_URL)
 DB_SESSION          = db.get_session(DB_ENGINE)
-TEST_ON_FEW_TASKS   = True
+# To test work on few tasks (for careful testing)
+FEW_DATA            = True
 
 async def sync_comments(g_tasks, sync_mode: int, get_comments_execution: str):
     """
@@ -128,7 +129,7 @@ async def sync_services(queue: str, sync_mode: str, board_id: int, to_get_follow
     await yapi.check_access_token(yapi.YA_ACCESS_TOKEN)
     await gapi.get_access_token(gapi.GAND_LOGIN, gapi.GAND_PASSWORD)
     g_tasks = await gapi.get_all_tasks(gapi.GroupsOfStatuses.in_progress)
-    if TEST_ON_FEW_TASKS:
+    if FEW_DATA:
         found_task_id   = 190069
         found_task      = None
         for task in g_tasks:
@@ -137,7 +138,6 @@ async def sync_services(queue: str, sync_mode: str, board_id: int, to_get_follow
                 break
         g_tasks = g_tasks[:3]
         g_tasks.append(found_task)
-    # TODO: remove!
 
     # ++
     # ya_tasks = await yapi.get_all_tasks(queue)
@@ -157,7 +157,7 @@ async def sync_services(queue: str, sync_mode: str, board_id: int, to_get_follow
     await yapi.batch_move_tasks_status(g_tasks, ya_tasks)
 
     g_finished_tasks = await gapi.get_all_tasks(gapi.GroupsOfStatuses.finished)
-    if TEST_ON_FEW_TASKS:
+    if FEW_DATA:
         g_finished_tasks = g_finished_tasks[:3]
         g_finished_tasks.append(found_task)
     
