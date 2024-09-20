@@ -117,58 +117,6 @@ async def sync_comments(g_tasks, sync_mode: int, get_comments_execution: str):
     logging.info(f"Total comments added: {added_comment_count}")
     logging.info(f"Total comments edited: {edited_comment_count}")
 
-async def sync_services(queue: str, sync_mode: str, board_id: int, to_get_followers: bool, use_summaries: bool):
-    """
-    Synchronize Gandiva and Yandex Tracker services.
-    queue: working queue in Yandex Tracker.
-    sync_mode: which comments to sync.
-    1 - all comments, 2 - only for programmers.
-    """
-    
-    logging.info(f"Sync started!")
-    await yapi.check_access_token(yapi.YA_ACCESS_TOKEN)
-    await gapi.get_access_token(gapi.GAND_LOGIN, gapi.GAND_PASSWORD)
-    g_tasks = await gapi.get_all_tasks(gapi.GroupsOfStatuses.in_progress)
-    if FEW_DATA:
-        found_task_id   = 190069
-        found_task      = None
-        for task in g_tasks:
-            if task['Id'] == found_task_id:
-                found_task = task
-                break
-        g_tasks = g_tasks[:3]
-        g_tasks.append(found_task)
-
-    # ++
-    # ya_tasks = await yapi.get_all_tasks(queue)
-    query = f'Resolution: empty() "Status Type": !cancelled "Status Type": !done Queue: {queue} "Sort by": Updated DESC'
-    ya_tasks = await yapi.get_all_tasks(query=query)
-    # --
-
-    # get gandiva_task_ids from summary and gandiva_task_id fields and combine all
-    not_closed_task_ids = utils.extract_task_ids_from_summaries(ya_tasks)
-    not_closed_task_ids_2 = utils.extract_task_ids_from_gandiva_task_id(ya_tasks)
-    not_closed_task_ids.update(not_closed_task_ids_2)
-    
-    # NOTE: uncomment to add new tasks
-    # await yapi.add_tasks(g_tasks, queue=queue, non_closed_ya_task_ids=not_closed_task_ids)
-    
-    await yapi.edit_tasks(g_tasks, ya_tasks, to_get_followers, use_summaries)
-    await yapi.batch_move_tasks_status(g_tasks, ya_tasks)
-
-    g_finished_tasks = await gapi.get_all_tasks(gapi.GroupsOfStatuses.finished)
-    if FEW_DATA:
-        g_finished_tasks = g_finished_tasks[:3]
-        g_finished_tasks.append(found_task)
-    
-    await yapi.batch_move_tasks_status(g_finished_tasks, ya_tasks)
-
-    await sync_comments(g_tasks, sync_mode, 'async')
-
-    await yapi.create_weekly_release_sprint(board_id)
-    logging.info("Sync finished successfully!")
-
-
 async def run_sync_services_periodically(queue: str, sync_mode: int, board_id: int, to_get_followers: bool = False,
                                          use_summaries: bool = False, interval_minutes: int = 30):
     """Runs sync_services every interval_minutes."""
@@ -237,6 +185,58 @@ async def update_db(queue):
     await update_tasks_in_db(queue = queue)
     await update_users_department_in_db()
     await update_it_users_in_db()
+
+async def sync_services(queue: str, sync_mode: str, board_id: int, to_get_followers: bool, use_summaries: bool):
+    """
+    Synchronize Gandiva and Yandex Tracker services.
+    queue: working queue in Yandex Tracker.
+    sync_mode: which comments to sync.
+    1 - all comments, 2 - only for programmers.
+    """
+    
+    logging.info(f"Sync started!")
+    await yapi.check_access_token(yapi.YA_ACCESS_TOKEN)
+    await gapi.get_access_token(gapi.GAND_LOGIN, gapi.GAND_PASSWORD)
+    g_tasks = await gapi.get_all_tasks(gapi.GroupsOfStatuses.in_progress)
+    if FEW_DATA:
+        found_task_id   = 190069
+        found_task      = None
+        for task in g_tasks:
+            if task['Id'] == found_task_id:
+                found_task = task
+                break
+        g_tasks = g_tasks[:10]
+        g_tasks.append(found_task)
+
+    # ++
+    # ya_tasks = await yapi.get_all_tasks(queue)
+    query = f'Resolution: empty() "Status Type": !cancelled "Status Type": !done Queue: {queue} "Sort by": Updated DESC'
+    ya_tasks = await yapi.get_all_tasks(query=query)
+    # --
+
+    # get gandiva_task_ids from summary and gandiva_task_id fields and combine all
+    not_closed_task_ids = utils.extract_task_ids_from_summaries(ya_tasks)
+    not_closed_task_ids_2 = utils.extract_task_ids_from_gandiva_task_id(ya_tasks)
+    not_closed_task_ids.update(not_closed_task_ids_2)
+    
+    # NOTE: uncomment to add new tasks
+    # await yapi.add_tasks(g_tasks, queue=queue, non_closed_ya_task_ids=not_closed_task_ids)
+    
+    await yapi.edit_tasks(g_tasks, ya_tasks, to_get_followers, use_summaries)
+    # NOTE: uncomment to move tasks to new statuses
+    # await yapi.batch_move_tasks_status(g_tasks, ya_tasks)
+
+    g_finished_tasks = await gapi.get_all_tasks(gapi.GroupsOfStatuses.finished)
+    if FEW_DATA:
+        g_finished_tasks = g_finished_tasks[:10]
+        g_finished_tasks.append(found_task)
+    # NOTE: uncomment to move finished tasks to new statuses
+    # await yapi.batch_move_tasks_status(g_finished_tasks, ya_tasks)
+
+    await sync_comments(g_tasks, sync_mode, 'async')
+
+    await yapi.create_weekly_release_sprint(board_id)
+    logging.info("Sync finished successfully!")
 
 if __name__ == "__main__":
     asyncio.run(main())
