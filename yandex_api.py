@@ -544,18 +544,16 @@ def get_editable_field(task_yandex, field_id, new_value):
         return new_value
     return None
 
-async def update_task_if_needed(task_yandex, gandiva_task_id, initiator_name, initiator_department, description, yandex_start_date, assignee_yandex_id, followers):
+async def update_task_if_needed(task_yandex, g_task_id, initiator_name, initiator_department, description, yandex_start_date, assignee_yandex_id, followers):
     """
     Check which fields need to be updated and call edit_task if any updates are necessary.
     """
     task_id_yandex = task_yandex.get('key')
     
     edit_followers = None
-    # TODO: убрал эту строчку
-    # if len(task_yandex.get('followers')
     if len(task_yandex.get('followers') or ()) < len(followers):
         edit_followers = followers
-
+    gandiva = GANDIVA_TASK_URL + g_task_id
     edit_fields = {
         'edit_initiator_name': get_editable_field(task_yandex, YA_FIELD_ID_INITIATOR, initiator_name),
         'edit_initiator_department': get_editable_field(task_yandex, YA_FIELD_ID_INITIATOR_DEPARTMENT, initiator_department),
@@ -564,7 +562,8 @@ async def update_task_if_needed(task_yandex, gandiva_task_id, initiator_name, in
         'edit_assignee_yandex_id': get_editable_field(task_yandex, 'assignee', assignee_yandex_id),
         'edit_analyst': None,
         'edit_followers': edit_followers,
-        'edit_gandiva_task_id': get_editable_field(task_yandex, YA_FIELD_ID_GANDIVA_TASK_ID, gandiva_task_id)
+        'edit_gandiva_task_id': get_editable_field(task_yandex, YA_FIELD_ID_GANDIVA_TASK_ID, g_task_id),
+        'edit_gandiva': get_editable_field(task_yandex, YA_FIELD_ID_GANDIVA, gandiva)
     }
 
     # Check for analyst by department
@@ -575,22 +574,23 @@ async def update_task_if_needed(task_yandex, gandiva_task_id, initiator_name, in
     # If any field needs to be edited, call the edit function
     if any(edit_fields.values()):
         response_json = await edit_task(
-            task_id_yandex      =task_id_yandex,
+            y_task_id           =task_id_yandex,
             initiator_name      =edit_fields['edit_initiator_name'],
             initiator_department=edit_fields['edit_initiator_department'],
             description         =edit_fields['edit_description'],
             start               =edit_fields['edit_yandex_start_date'],
             analyst             =edit_fields['edit_analyst'],
-            assignee_id_yandex  =edit_fields['edit_assignee_yandex_id'],
+            y_assignee_id       =edit_fields['edit_assignee_yandex_id'],
             followers           =edit_fields['edit_followers'],
-            gandiva_task_id     =edit_fields['edit_gandiva_task_id'])
+            g_task_id           =edit_fields['edit_gandiva_task_id'],
+            gandiva             =edit_fields['edit_gandiva'])
         if response_json:
              # Return True to indicate the task was edited
             return True
         else:
             return False
     else:
-        logging.debug(f"Task {gandiva_task_id} is already up-to-date.")
+        logging.debug(f"Task {g_task_id} is already up-to-date.")
         return False
 
 def create_ya_tasks_dict(ya_tasks, use_summaries):
@@ -646,8 +646,8 @@ async def edit_tasks(tasks_gandiva, ya_tasks, to_get_followers, use_summaries=Fa
         initiator_name          = fields.get('initiator_name')
         initiator_department    = fields.get('initiator_department')
         description             = fields.get('description')
-        y_start_date       = fields.get('yandex_start_date')
-        y_assignee_id      = fields.get('assignee_id_yandex')
+        y_start_date            = fields.get('yandex_start_date')
+        y_assignee_id           = fields.get('assignee_id_yandex')
         followers               = fields.get('followers')
 
 
@@ -662,36 +662,23 @@ async def edit_tasks(tasks_gandiva, ya_tasks, to_get_followers, use_summaries=Fa
     logging.info(f"Total tasks edited: {edited_task_count}")
 
 
-async def edit_task(task_id_yandex,
-                    summary=None,
-                    description=None,
-                    assignee_id_yandex=None,
-                    task_type=None,
-                    priority=None,
-                    parent=None,
-                    sprint=None,
-                    followers=None,
-                    initiator_name=None,
-                    initiator_department=None,
-                    analyst=None,
-                    start=None,
-                    gandiva_task_id=None):
+async def edit_task(y_task_id, summary=None, description=None,
+                    y_assignee_id=None, task_type=None, priority=None,
+                    parent=None, sprint=None, followers=None,
+                    initiator_name=None, initiator_department=None,
+                    analyst=None, start=None, g_task_id=None, gandiva=None):
 
     # Convert the task ID to a string
-    task_id_yandex = str(task_id_yandex)
+    y_task_id = str(y_task_id)
 
     # Prepare the request body
     body = {}
     # Fetch task from the database
-    task_in_db = db.get_task_by_yandex_id(session=DB_SESSION, task_id_yandex=task_id_yandex)
-    if task_in_db:
-        task_id_gandiva = task_in_db.task_id_gandiva
-        body[YA_FIELD_ID_GANDIVA] = GANDIVA_TASK_URL + task_id_gandiva
     
     # Add fields to the request body if provided
     if summary: body["summary"] = summary
     if description: body["description"] = description
-    if assignee_id_yandex: body["assignee"] = assignee_id_yandex
+    if y_assignee_id: body["assignee"] = y_assignee_id
     if task_type: body["type"] = task_type
     if priority: body["priority"] = priority
     if parent: body["parent"] = parent
@@ -701,21 +688,23 @@ async def edit_task(task_id_yandex,
     if initiator_department: body[YA_FIELD_ID_INITIATOR_DEPARTMENT] = initiator_department
     if analyst: body[YA_FIELD_ID_ANALYST] = analyst
     if start: body["start"] = start
-    if gandiva_task_id: body[YA_FIELD_ID_GANDIVA_TASK_ID] = gandiva_task_id
+    if g_task_id: body[YA_FIELD_ID_GANDIVA_TASK_ID] = g_task_id
+    if gandiva: body[YA_FIELD_ID_GANDIVA] = gandiva
+
 
     # Convert the body to a JSON string
     body_json = json.dumps(body)
 
     # Construct the URL for updating the task
-    url = f"{HOST}/v2/issues/{task_id_yandex}"
+    url = f"{HOST}/v2/issues/{y_task_id}"
 
     # Use the helper function to make the PATCH request
     response = await make_http_request('PATCH', url, headers=HEADERS, body=body_json)
     if response:
-        logging.info(f"Successfully edited task {task_id_yandex}")
+        logging.info(f"Successfully edited task {y_task_id}")
         return response
     else:
-        logging.error(f"Failed editing task {task_id_yandex}")
+        logging.error(f"Failed editing task {y_task_id}")
         return None
 
 async def move_task_status(
