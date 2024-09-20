@@ -17,7 +17,7 @@ DB_URL              = config.get('Database', 'url')
 DB_ENGINE           = db.create_database(DB_URL)
 DB_SESSION          = db.get_session(DB_ENGINE)
 # To test work on few tasks (for careful testing)
-FEW_DATA            = True
+FEW_DATA            = False
 
 async def sync_comments(g_tasks, sync_mode: int, get_comments_execution: str):
     """
