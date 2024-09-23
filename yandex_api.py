@@ -442,7 +442,7 @@ async def add_task(g_task_id, initiator_name, queue,
         YA_FIELD_ID_INITIATOR: initiator_name,
         YA_FIELD_ID_GANDIVA: GANDIVA_TASK_URL + g_task_id,
         YA_FIELD_ID_GANDIVA_TASK_ID: g_task_id,
-        "unique": g_task_id
+        "unique": queue + g_task_id
     }
 
     # Optionally add other fields
@@ -510,6 +510,8 @@ async def add_tasks(g_tasks: list[dict], queue: str, non_closed_ya_task_ids: dic
         # Check if the result indicates the task was added (assuming it returns a dict on success)
         if isinstance(result, dict):
             added_task_count += 1
+        elif isinstance(result, db.Task):
+            logging.debug(f"Task {g_task_id} already exists.")
         else:
             logging.debug(f"Task {g_task_id} could not be added or already exists.")
 
@@ -721,7 +723,7 @@ async def move_task_status(y_task_id, transition_id,
     return await make_http_request('POST', url, headers=HEADERS, body=body_json)
 
 async def move_tasks_status(y_tasks, new_status):
-    """Returns sprints (as a dictionary) for the given board."""
+    """Moves tasks to new status."""
     url = f"{HOST}/v2/bulkchange/_transition"
     transition = utils.get_yandex_transition_from_status(new_status)
     task_keys = utils.extract_task_keys(y_tasks)
@@ -753,8 +755,8 @@ async def move_status_task_groups(grouped_y_tasks: dict):
     
     return results
 
-async def batch_move_tasks_status(g_tasks, ya_tasks, to_filter: bool = True):
-    grouped_ya_tasks = utils.group_tasks_by_status(g_tasks=g_tasks, y_tasks=ya_tasks, to_filter=to_filter)
+async def batch_move_tasks_status(g_tasks, y_tasks, to_filter: bool = True):
+    grouped_ya_tasks = utils.group_tasks_by_status(g_tasks=g_tasks, y_tasks=y_tasks, to_filter=to_filter)
     await move_status_task_groups(grouped_ya_tasks)
     logging.info("Task statuses are up-to-date!")
 

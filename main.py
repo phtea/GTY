@@ -137,7 +137,7 @@ async def run_sync_services_periodically(queue: str, sync_mode: int, board_id: i
         await asyncio.sleep(interval_minutes * 60)
 
 async def update_tasks_in_db(queue: str):
-    y_tasks = await yapi.get_all_tasks(query=yapi.get_query_in_progress(queue))
+    y_tasks = await yapi.get_all_tasks(query=yapi.get_query_all(queue))
     db.add_tasks(session=DB_SESSION, y_tasks=y_tasks)
 
 async def update_users_department_in_db():
@@ -218,27 +218,29 @@ async def sync_services(queue: str, sync_mode: str, board_id: int, to_get_follow
 
     # get gandiva_task_ids from summary and gandiva_task_id fields and combine all
     not_closed_task_ids = {}
-    if use_summaries:
+    # NOTE: careful with or True
+    if use_summaries or True:
         not_closed_task_ids = utils.extract_task_ids_from_summaries(y_tasks)
     not_closed_task_ids_2 = utils.extract_task_ids_from_gandiva_task_id(y_tasks)
     not_closed_task_ids.update(not_closed_task_ids_2)
     
     # NOTE: uncomment to add new tasks
-    # await yapi.add_tasks(g_tasks, queue=queue, non_closed_ya_task_ids=not_closed_task_ids)
+    await yapi.add_tasks(g_tasks, queue=queue, non_closed_ya_task_ids=not_closed_task_ids)
     
     await yapi.edit_tasks(g_tasks, y_tasks, to_get_followers, use_summaries)
-    # NOTE: uncomment to move tasks to new statuses
-    # await yapi.batch_move_tasks_status(g_tasks, ya_tasks)
-    return
+    
+    y_tasks_new = await yapi.get_all_tasks(query=yapi.get_query_in_progress(queue))
+    await yapi.batch_move_tasks_status(g_tasks, y_tasks_new)
+    
     g_finished_tasks = await gapi.get_all_tasks(gapi.GroupsOfStatuses.finished)
     if FEW_DATA:
         g_finished_tasks = g_finished_tasks[:12]
         g_finished_tasks.append(found_task)
-    # NOTE: uncomment to move finished tasks to new statuses
+    
     await yapi.batch_move_tasks_status(g_finished_tasks, y_tasks)
-
-    await sync_comments(g_tasks, sync_mode, 'async')
-
+    
+    # NOTE: uncomment to sync_comments
+    # await sync_comments(g_tasks, sync_mode, 'async')
     await yapi.create_weekly_release_sprint(board_id)
     logging.info("Sync finished successfully!")
 
