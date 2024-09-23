@@ -28,7 +28,7 @@ def setup_logging():
     # Set logging level
     logging.getLogger().setLevel(logging.INFO)
 
-def group_tasks_by_status(g_tasks: list, y_tasks: list, to_filter: bool = True) -> dict:
+def group_tasks_by_status(g_tasks: list, yandex_tasks: list, to_filter: bool = True) -> dict:
     """
     Groups tasks by their current Gandiva status, with an option to filter tasks where 
     the Gandiva task has transitioned to a new status compared to the Yandex task.
@@ -50,7 +50,7 @@ def group_tasks_by_status(g_tasks: list, y_tasks: list, to_filter: bool = True) 
         g_status = g_task['Status']
 
         # Step 2: Get the Yandex task based on Gandiva task ID
-        y_task = next((task for task in y_tasks if task.get(yapi.YA_FIELD_ID_GANDIVA_TASK_ID) == str(g_task_id)), None)
+        y_task = next((task for task in yandex_tasks if task.get(yapi.YA_FIELD_ID_GANDIVA_TASK_ID) == str(g_task_id)), None)
         if not y_task:
             continue
 
