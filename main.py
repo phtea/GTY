@@ -161,7 +161,7 @@ async def run_sync_services_periodically(queue: str, sync_mode: int, board_id: i
         await asyncio.sleep(interval_minutes * 60)
 
 async def update_tasks_in_db(queue: str):
-    y_tasks = await yapi.get_all_tasks(query=yapi.get_query_all(queue))
+    y_tasks = await yapi.get_tasks(query=yapi.get_query_all(queue))
     db.add_tasks(session=DB_SESSION, y_tasks=y_tasks)
 
 async def update_users_department_in_db():
@@ -177,7 +177,7 @@ async def update_it_users_in_db():
     it_uids     = await utils.map_emails_to_ids(it_users, y_users)
     g_tasks     = await gapi.get_all_tasks()
     g_users     = utils.extract_unique_gandiva_users(g_tasks)
-    uids_y_g    = utils.map_it_uids_to_gandiva_ids(it_uids, g_users)
+    uids_y_g    = utils.map_it_uids_to_g_ids(it_uids, g_users)
     db.add_or_update_user(session=DB_SESSION, user_data=uids_y_g)
 
 
@@ -226,12 +226,12 @@ async def sync_services(queue: str, sync_mode: str, board_id: int, to_get_follow
     await gapi.get_access_token(gapi.GAND_LOGIN, gapi.GAND_PASSWORD)
 
 
-    # temp
-    g_task  = await gapi.get_task_by_id(196295)
-    g_tasks = [g_task]
-    await sync_comments(g_tasks, sync_mode)
-    return
-    # temp
+    # # temp
+    # g_task  = await gapi.get_task_by_id(196295)
+    # g_tasks = [g_task]
+    # await sync_comments(g_tasks, sync_mode)
+    # return
+    # # temp
 
     g_tasks = await gapi.get_all_tasks(gapi.GroupsOfStatuses.in_progress)
     if FEW_DATA:
@@ -245,8 +245,8 @@ async def sync_services(queue: str, sync_mode: str, board_id: int, to_get_follow
         g_tasks.append(found_task)
 
     # ++
-    # ya_tasks = await yapi.get_all_tasks(queue)
-    y_tasks = await yapi.get_all_tasks(query=yapi.get_query_in_progress(queue))
+    # y_tasks = await yapi.get_all_tasks(queue)
+    y_tasks = await yapi.get_tasks(query=yapi.get_query_in_progress(queue))
     # --
 
     # get gandiva_task_ids from summary and gandiva_task_id fields and combine all
@@ -262,7 +262,7 @@ async def sync_services(queue: str, sync_mode: str, board_id: int, to_get_follow
     
     await yapi.edit_tasks(g_tasks, y_tasks, to_get_followers, use_summaries)
     
-    y_tasks_new = await yapi.get_all_tasks(query=yapi.get_query_in_progress(queue))
+    y_tasks_new = await yapi.get_tasks(query=yapi.get_query_in_progress(queue))
     await yapi.batch_move_tasks_status(g_tasks, y_tasks_new)
     
     g_finished_tasks = await gapi.get_all_tasks(gapi.GroupsOfStatuses.finished)

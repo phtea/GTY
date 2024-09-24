@@ -146,7 +146,7 @@ def get_headers(content_type="application/json"):
 
 # Functions
 
-async def get_task_by_id(g_task_id):
+async def get_task(g_task_id):
     """Fetch a task by ID using the GAND API."""
     content_type = "application/x-www-form-urlencoded"
     url = f"{HOST}/api/Requests/{g_task_id}"
