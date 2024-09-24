@@ -19,7 +19,7 @@ def setup_logging():
     handler = RotatingFileHandler("gty.log", maxBytes=max_size, backupCount=backupCount)
 
     # Set the logging format
-    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s (%(module)s: %(funcName)s)")
     handler.setFormatter(formatter)
 
     # Add handler to the root logger
@@ -266,52 +266,60 @@ MONTHS_RUSSIAN = {
 
 def extract_department_analysts(csv_file: str) -> dict:
     """
-    Extracts departments and their corresponding analyst emails from the given CSV file.
+    Extracts departments, their corresponding activity direction (НД), and analyst emails from the given CSV file.
 
     Parameters:
-    - csv_file (str): Path to the CSV file containing department and analyst information.
+    - csv_file (str): Path to the CSV file containing department, НД, and analyst information.
 
     Returns:
-    - dict: A dictionary where the keys are department names and the values are the corresponding analyst emails.
+    - dict: A dictionary where the keys are department names and the values are dictionaries containing 'НД' and 'yandex_analyst_mail'.
     """
     department_analyst_dict = {}
 
     # Try a different encoding, such as ISO-8859-1 or cp1251
-    with open(csv_file, mode='r', encoding='cp1251') as file:  # Change encoding here
+    with open(csv_file, mode='r', encoding='cp1251') as file:
         reader = csv.DictReader(file, delimiter=';')
 
         for row in reader:
             department = row['department']
+            nd = row['НД']  # Extract the НД column
             analyst_email = row['yandex_analyst_mail']
 
-            # Store the analyst email corresponding to the department
-            department_analyst_dict[department] = analyst_email
+            # Store the НД and analyst email corresponding to the department
+            department_analyst_dict[department] = {
+                'НД': nd,
+                'yandex_analyst_mail': analyst_email
+            }
 
     return department_analyst_dict
 
-def map_department_to_user_id(department_analyst_dict: dict, users: list) -> dict:
+def map_department_nd_to_user_id(department_analyst_dict: dict, users: list) -> dict:
     """
-    Maps each department to the corresponding user ID based on matching email addresses.
+    Maps each department and НД (activity direction) to the corresponding user ID based on matching email addresses.
 
     Parameters:
-    - department_analyst_dict (dict): A dictionary where the keys are department names and the values are analyst emails.
+    - department_analyst_dict (dict): A dictionary where the keys are department names and the values are dictionaries 
+      containing 'НД' and 'yandex_analyst_mail'.
     - users (list): A list of user objects, where each object contains an 'email' and 'uid' key.
 
     Returns:
-    - dict: A dictionary where the keys are department names and the values are the corresponding user IDs (uids).
+    - dict: A dictionary where the keys are tuples of (department, НД) and the values are the corresponding user IDs (uids).
     """
     department_user_mapping = {}
 
     # Create a dictionary to quickly lookup user 'uid' by their email
     email_to_uid = {user['email']: user['uid'] for user in users}
 
-    # Iterate over each department and find the matching uid for the analyst's email
-    for department, email in department_analyst_dict.items():
+    # Iterate over each department and НД, and find the matching uid for the analyst's email
+    for department, details in department_analyst_dict.items():
+        email = details['yandex_analyst_mail']
+        nd = details['НД']  # Extract the НД value
         uid = email_to_uid.get(email)  # Find the user 'uid' by email
+
         if uid:
-            department_user_mapping[department] = uid
+            department_user_mapping[(department, nd)] = uid
         else:
-            logging.warning(f"No user found with email {email} for department {department}")
+            logging.warning(f"No user found with email {email} for department {department} and НД {nd}")
 
     return department_user_mapping
 
@@ -453,20 +461,36 @@ def extract_task_ids_from_summaries(ya_tasks):
 
     return task_info_dict
 
+def extract_gandiva_task_id_from_task(task):
+    """
+    Extracts the Gandiva task ID from a single task dictionary.
+
+    :param task: A task dictionary containing the GandivaTaskId.
+    :return: The Gandiva task ID or None if no task ID is found.
+    """
+    return task.get(yapi.YA_FIELD_ID_GANDIVA_TASK_ID)
+
+
 def extract_task_ids_from_gandiva_task_id(ya_tasks):
     """
     Extracts task IDs from the 'GandivaTaskId' field of each task in ya_tasks and detects duplicates.
 
-    :param ya_tasks: List of task dictionaries containing 'summary' and 'key' fields.
-    :return: A dictionary with task_id as keys and ya_task_key as values.
+    :param ya_tasks: List of task dictionaries containing 'GandivaTaskId' and 'key' fields.
+    :return: A dictionary with gandiva_task_id as keys and ya_task_key as values.
     """
     task_info_dict = {}
+    seen_gandiva_task_ids = set()  # To track task IDs we've already encountered
 
     for task in ya_tasks:
-        gandiva_task_id = task.get(yapi.YA_FIELD_ID_GANDIVA_TASK_ID)
+        gandiva_task_id = extract_gandiva_task_id_from_task(task)
         ya_task_key = task.get('key')  # Extract the 'key' field
-        if not gandiva_task_id: continue
-        task_info_dict[gandiva_task_id] = ya_task_key
+
+        if gandiva_task_id:
+            if gandiva_task_id in seen_gandiva_task_ids:
+                logging.warning(f"Duplicate Gandiva task ID found: {gandiva_task_id}")
+            else:
+                task_info_dict[gandiva_task_id] = ya_task_key
+                seen_gandiva_task_ids.add(gandiva_task_id)
 
     return task_info_dict
 
@@ -524,14 +548,59 @@ def task_exists_in_list(g_tasks, task_id):
             return True
     return False
 
+def g_addressee_exists(addressees, addressee):
+    for addressee in addressees:
+        if addressee['User']['Id'] == addressee:
+            return True
+    return False
+
+def remove_mentions(text: str) -> str:
+    """
+    Removes @xxxxx mentions from the given text.
+
+    :param text: The text from which to remove mentions.
+    :return: The text with all mentions removed.
+    """
+    # Use regex to find and remove all occurrences of @ followed by non-space characters
+    return re.sub(r'@\S+', '', text).strip()
+
+def is_id_in_summonees(y_author_id: str, y_summonees: list) -> bool:
+    """
+    Check if y_author_id is present in the 'id' field of summonees.
+
+    :param y_author_id: The author ID to check for.
+    :param summonees: A list of dictionaries representing the summonees.
+    :return: True if y_author_id is found in summonees, False otherwise.
+    """
+    for summonee in y_summonees:
+        if summonee.get('id') == y_author_id:
+            return True
+    return False
+
+def extract_existing_comments_from_gandiva(g_comments):
+    """
+    Extracts the existing comments from Gandiva and returns a mapping of g_comment_id to g_text.
+    """
+    existing_g_comments = {}
+
+    for g_comment in g_comments:
+        g_text = g_comment['Text']
+        match = re.match(r'\[(\d+)\]', g_text)  # Match [g_comment_id] format
+        if match:
+            g_comment_id = match.group(1)
+            existing_g_comments[g_comment_id] = g_text  # Map g_comment_id to g_text
+
+    return existing_g_comments
+
+def is_g_comment_author_this(g_comment, author_id):
+    return True if g_comment.get('Author') and g_comment.get('Author').get('Id') and str(g_comment.get('Author').get('Id')) == str(author_id) else None
+
 import yandex_api as yapi
 import gandiva_api as gapi
 import asyncio    
 async def main():
-    query = 'Resolution: empty() "Status Type": !cancelled "Status Type": !done Queue: TEA "Sort by": Updated DESC'
-    ya_tasks = await yapi.get_all_tasks(query=query)
-    tasks_ids_from_summaries = extract_task_ids_from_summaries(ya_tasks)
-    unmatched_tasks = find_unmatched_tasks(ya_tasks, tasks_ids_from_summaries)
+    g_task  = gapi.get_task_by_id(196295)
+    g_tasks = [g_task]
     pass
 
 

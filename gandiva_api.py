@@ -17,6 +17,7 @@ GAND_REFRESH_TOKEN      = ''
 GAND_LOGIN              = config.get('Gandiva', 'login')
 GAND_PASSWORD           = config.get('Gandiva', 'password')
 GAND_PROGRAMMER_ID      = config.getint('Gandiva', 'programmer_id')
+GAND_ROBOT_ID           = config.getint('Gandiva', 'robot_id')
 MAX_CONCURRENT_REQUESTS = config.getint('Gandiva', 'max_concurrent_requests')
 
 class GroupsOfStatuses:
@@ -62,7 +63,7 @@ HOST = "https://api-gandiva.s-stroy.ru"
 
 # Authorization block
 
-async def get_access_token(username, password):
+async def get_access_token(login, password):
     """Updates GAND_ACCESS_TOKEN and GAND_REFRESH_TOKEN from login+password
     
     Returns access_token"""
@@ -71,7 +72,7 @@ async def get_access_token(username, password):
 
     body = {
         "grant_type": "password",
-        "username": username,
+        "username": login,
         "password": password
     }
     body = urllib.parse.urlencode(body)
@@ -93,7 +94,7 @@ async def get_access_token(username, password):
 
         global GAND_REFRESH_TOKEN
         GAND_REFRESH_TOKEN = refresh_token
-        logging.info(f"Authorized user: {username} [Gandiva]")
+        logging.info(f"Authorized user: {login} [Gandiva]")
         return access_token
     else:
         logging.error("Failed to retrieve access token.")
@@ -197,7 +198,7 @@ async def get_page_of_tasks(page_number: int, statuses: list[int]):
     }
 
     response = await make_http_request(method="POST", url=url, 
-        headers=get_headers(content_type="application/json"), body=json.dumps(body))
+        headers=get_headers(), body=json.dumps(body))
 
     if response:
         logging.debug(f"Page {page_number} fetched.")
@@ -213,15 +214,15 @@ async def get_task_comments(g_task_id):
 
     url = f"{HOST}/api/Requests/{g_task_id}/Comments"
     
-    response_json = await make_http_request(
+    response = await make_http_request(
         method="GET", 
         url=url, 
-        headers=get_headers(content_type="application/json")
+        headers=get_headers()
     )
 
-    if response_json or response_json == []:
-        logging.debug(f"Found {len(response_json)} comments for task {g_task_id}.")
-        return response_json
+    if response or response == []:
+        logging.debug(f"Found {len(response)} comments for task {g_task_id}.")
+        return response
     else:
         logging.error(f"Failed to fetch comments for task {g_task_id}")
         return None
@@ -263,7 +264,7 @@ async def get_comments_for_tasks_consecutively(g_task_ids: list[int]):
     return task_comments
 
 async def get_all_tasks(statutes: list[int] = [3, 4, 6, 8, 10, 11]):
-    logging.info("Fetching tasks... [Gandiva]")
+    logging.info("Fetching tasks...")
     all_requests = []
     
     # Fetch the first page to get the total count and number of pages
@@ -276,7 +277,7 @@ async def get_all_tasks(statutes: list[int] = [3, 4, 6, 8, 10, 11]):
 
     # Calculate the total number of pages
     total_pages = (total_requests // 100) + 1
-    logging.debug(f"Found {total_pages} pages of tasks. [Gandiva]")
+    logging.debug(f"Found {total_pages} pages of tasks.")
 
     # Create a list of tasks for all remaining pages
     tasks = [
@@ -296,12 +297,129 @@ async def get_all_tasks(statutes: list[int] = [3, 4, 6, 8, 10, 11]):
 
     return all_requests
 
+# Comments functionality
+async def add_comment(g_task_id, text, y_comment_id, author_name, addressees=None):
+    """Fetch comments for a list of tasks one at a time."""
+    url = f"{HOST}/api/Requests/{g_task_id}/Comments"
+    # Format the comment according to the specified template
+    if y_comment_id and author_name:
+        text = f"[{y_comment_id}] {author_name}:\n{text}"
+        
+    body = {"Text": text}
+
+    if addressees: body["Addressees"] = addressees
+
+    response = await make_http_request(
+        method="POST", 
+        url=url, 
+        headers=get_headers(),
+        body=json.dumps(body)
+    )
+
+    if response:
+        logging.debug(f"Comment was successfully added to task {g_task_id}!")
+        return response
+    else:
+        logging.error(f"Comment was not added to task {g_task_id}.")
+        return None
+
+async def edit_task(g_task_id: int, last_modified_date: str, required_start_date: str = None):
+    """edit task in Gandiva"""
+    url = f"{HOST}/api/Requests/{g_task_id}"
+    body = {
+        "LastModifiedDate": last_modified_date
+    }
+    if required_start_date: body["RequiredStartDate"] = required_start_date
+    
+    response = await make_http_request(
+        method="PUT", 
+        url=url, 
+        headers=get_headers(),
+        body=json.dumps(body))
+    
+    if response:
+        logging.debug(f"Task {g_task_id} was successfully edited!")
+        return response
+    else:
+        logging.error(f"Task {g_task_id} was not edited.")
+        return None
+
+async def edit_task_required_start_date(g_task_id: int, last_modified_date: str, required_start_date: str = None):
+    """edit task in Gandiva"""
+    url = f"{HOST}/api/Requests/{g_task_id}/RequiredStartDate"
+    body = {
+        "LastModifiedDate": last_modified_date
+    }
+    if required_start_date: body["RequiredStartDate"] = required_start_date
+    
+    response = await make_http_request(
+        method="PUT", 
+        url=url, 
+        headers=get_headers(),
+        body=json.dumps(body))
+    
+    if response:
+        logging.debug(f"Task's RequiredStartDate {g_task_id} was successfully edited!")
+        return response
+    else:
+        logging.error(f"Task's RequiredStartDate {g_task_id} was not edited.")
+        return None
+
+async def delete_comment(g_comment_id, text, addressees=None):
+    """Fetch comments for a list of tasks one at a time."""
+    url = f"{HOST}/api/Common/Comments/{g_comment_id}"
+
+    body = {
+    "Text": text
+    }
+
+    if addressees: body["Addressees"] = addressees
+
+    response = await make_http_request(
+        method="PUT", 
+        url=url, 
+        headers=get_headers(),
+        body=json.dumps(body)
+    )
+
+    if response:
+        logging.debug(f"Comment [{g_comment_id}] was successfully edited!")
+        return response
+    else:
+        logging.error(f"Comment [{g_comment_id}] was not edited.")
+        return None
+
+async def delete_comment(g_comment_id):
+    """Fetch comments for a list of tasks one at a time."""
+    url = f"{HOST}/api/Common/Comments/{g_comment_id}"
+
+    response = await make_http_request(method="DELETE", url=url, headers=get_headers())
+
+    # TODO: может быть, это неправильная реализация, понадобится проверка на error в словаре
+    if response:
+        logging.debug(f"Comment [{g_comment_id}] was successfully deleted!")
+        return response
+    else:
+        logging.error(f"Comment [{g_comment_id}] was not deleted.")
+        return None
+
+async def handle_tasks_in_work_but_waiting_for_analyst(needed_date):
+    """needed_date in format: 2025-01-01T00:00:00+03:00"""
+    tasks = await get_all_tasks(statutes=[6, 11, 13])
+    waiting_for_analyst_id = 1018
+    needed_tasks = []
+    for task in tasks:
+        if task.get('Contractor') and task.get('Contractor').get('Id') and task.get('Contractor').get('Id') == waiting_for_analyst_id:
+            needed_tasks.append(task)
+    for needed_task in needed_tasks:
+        last_modified_date = needed_task.get('LastModifiedDate')
+        task_id = needed_task.get('Id')
+        await edit_task_required_start_date(task_id, last_modified_date, required_start_date=needed_date)
 
 import time # using for timing functions
 async def main():
-
     await get_access_token(GAND_LOGIN, GAND_PASSWORD)
-
+    pass
 
 if __name__ == '__main__':
     # get_access_token(GAND_LOGIN, GAND_PASSWORD)
