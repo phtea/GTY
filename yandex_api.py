@@ -20,11 +20,13 @@ YA_X_CLOUD_ORG_ID                   = config.get('Yandex', 'x_cloud_org_id')
 YA_ACCESS_TOKEN                     = config.get('Yandex', 'oauth_token')
 YA_CLIENT_ID                        = config.get('Yandex', 'client_id')
 YA_CLIENT_SECRET                    = config.get('Yandex', 'client_secret')
+YA_ROBOT_ID                         = config.get('Yandex', 'robot_id')
 YA_FIELD_ID_GANDIVA                 = config.get('YandexCustomFieldIds', 'gandiva') 
 YA_FIELD_ID_INITIATOR               = config.get('YandexCustomFieldIds', 'initiator') 
 YA_FIELD_ID_INITIATOR_DEPARTMENT    = config.get('YandexCustomFieldIds', 'initiator_department')
 YA_FIELD_ID_ANALYST                 = config.get('YandexCustomFieldIds', 'analyst')
 YA_FIELD_ID_GANDIVA_TASK_ID         = config.get('YandexCustomFieldIds', 'gandiva_task_id')
+YA_FIELD_ID_ND                      = config.get('YandexCustomFieldIds', 'nd')
 DB_URL                              = config.get('Database', 'url')
 YA_REFRESH_TOKEN                    = ''
 GANDIVA_TASK_URL                    = 'https://gandiva.s-stroy.ru/Request/Edit/'
@@ -107,7 +109,7 @@ async def check_access_token(access_token) -> str:
 
     # Check if the response is successful
     if response:
-        logging.info(f"Authorized user: {response['login']} [Yandex Tracker]")
+        logging.info(f"Authorized user: {response['login']}")
         return
 
     # If the response is not successful, refresh the access token
@@ -168,6 +170,9 @@ async def convert_gandiva_to_yandex_fields(g_task: dict, edit: bool, to_get_foll
     description             = utils.html_to_yandex_format(description_html)  # Assuming a helper function to extract text from HTML
     initiator_id            = g_task['Initiator']['Id']
     initiator_department    = await gandiva_api.get_department_by_user_id(g_user_id=initiator_id)
+    nd                      = None
+    if initiator_department:
+        nd = db.get_nd_by_department_name(session=DB_SESSION, department_name=initiator_department)
     
     # Add assignee if exists
     g_assignee        = g_task.get('Contractor')
@@ -197,7 +202,8 @@ async def convert_gandiva_to_yandex_fields(g_task: dict, edit: bool, to_get_foll
             'task_type': task_type,
             'initiator_id': initiator_id,
             'initiator_department': initiator_department,
-            'yandex_start_date': y_start_date
+            'yandex_start_date': y_start_date,
+            'nd': nd
         }
     
     followers = []
@@ -215,7 +221,8 @@ async def convert_gandiva_to_yandex_fields(g_task: dict, edit: bool, to_get_foll
         'initiator_department': initiator_department,
         'yandex_start_date': y_start_date,
         'assignee_id_yandex': y_assignee_id,
-        'followers': followers
+        'followers': followers,
+        'nd': nd
     }
 
 # Functions
@@ -421,7 +428,7 @@ async def get_task(y_task_id: str) -> dict:
 
 async def add_task(g_task_id, initiator_name, queue,
                    description="Без описания", y_assignee=None,
-                   task_type=None, initiator_department=None, start=None):
+                   task_type=None, initiator_department=None, start=None, nd=None):
 
     # Convert the task ID to a string
     g_task_id = str(g_task_id)
@@ -442,7 +449,7 @@ async def add_task(g_task_id, initiator_name, queue,
         YA_FIELD_ID_INITIATOR: initiator_name,
         YA_FIELD_ID_GANDIVA: GANDIVA_TASK_URL + g_task_id,
         YA_FIELD_ID_GANDIVA_TASK_ID: g_task_id,
-        "unique": g_task_id
+        "unique": queue + g_task_id
     }
 
     # Optionally add other fields
@@ -451,8 +458,9 @@ async def add_task(g_task_id, initiator_name, queue,
     if initiator_department:
         body[YA_FIELD_ID_INITIATOR_DEPARTMENT] = initiator_department
         analyst = db.get_user_id_by_department(session=DB_SESSION, department_name=initiator_department)
-        if analyst:
-            body[YA_FIELD_ID_ANALYST] = db.get_user_id_by_department(session=DB_SESSION, department_name=initiator_department)
+        if analyst: body[YA_FIELD_ID_ANALYST] = analyst
+    if nd: body[YA_FIELD_ID_ND] = nd
+        
     if start: body["start"] = start
 
     # Convert the body to a JSON string
@@ -502,14 +510,17 @@ async def add_tasks(g_tasks: list[dict], queue: str, non_closed_ya_task_ids: dic
         y_assignee          = fields.get('assignee_id_yandex')
         task_type           = fields.get('task_type')
         start               = fields.get('yandex_start_date')
+        nd                  = fields.get('nd')
         # Call add_task and check if a task was successfully added
         result = await add_task(g_task_id, initiator_name, initiator_department=initiator_department,
                                 description=description, queue=queue, y_assignee=y_assignee,
-                                task_type=task_type, start=start)
+                                task_type=task_type, start=start, nd=nd)
 
-        # Check if the result indicates the task was added (assuming it returns a dict on success)
+        # Check if the result indicates the task was added
         if isinstance(result, dict):
             added_task_count += 1
+        elif isinstance(result, db.Task):
+            logging.debug(f"Task {g_task_id} already exists.")
         else:
             logging.debug(f"Task {g_task_id} could not be added or already exists.")
 
@@ -529,7 +540,7 @@ def get_editable_field(y_task, field_id, new_value):
         return new_value
     return None
 
-async def update_task_if_needed(y_task, g_task_id, initiator_name, initiator_department, description, y_start_date, y_assignee, followers):
+async def update_task_if_needed(y_task, g_task_id, initiator_name, initiator_department, description, y_start_date, y_assignee, followers, nd):
     """
     Check which fields need to be updated and call edit_task if any updates are necessary.
     """
@@ -548,7 +559,8 @@ async def update_task_if_needed(y_task, g_task_id, initiator_name, initiator_dep
         'edit_analyst': None,
         'edit_followers': edit_followers,
         'edit_gandiva_task_id': get_editable_field(y_task, YA_FIELD_ID_GANDIVA_TASK_ID, g_task_id),
-        'edit_gandiva': get_editable_field(y_task, YA_FIELD_ID_GANDIVA, gandiva)
+        'edit_gandiva': get_editable_field(y_task, YA_FIELD_ID_GANDIVA, gandiva),
+        'edit_nd': get_editable_field(y_task, YA_FIELD_ID_ND, nd)
     }
 
     # Check for analyst by department
@@ -568,7 +580,8 @@ async def update_task_if_needed(y_task, g_task_id, initiator_name, initiator_dep
             y_assignee_id       =edit_fields['edit_assignee_yandex_id'],
             followers           =edit_fields['edit_followers'],
             g_task_id           =edit_fields['edit_gandiva_task_id'],
-            gandiva             =edit_fields['edit_gandiva'])
+            gandiva             =edit_fields['edit_gandiva'],
+            nd                  =edit_fields['edit_nd'])
         if response_json:
              # Return True to indicate the task was edited
             return True
@@ -634,11 +647,11 @@ async def edit_tasks(g_tasks, y_tasks, to_get_followers, use_summaries=False):
         y_start_date            = fields.get('yandex_start_date')
         y_assignee_id           = fields.get('assignee_id_yandex')
         followers               = fields.get('followers')
-
+        nd                      = fields.get('nd')
 
        
 
-        if await update_task_if_needed(y_task, g_task_id, initiator_name, initiator_department, description, y_start_date, y_assignee_id, followers):
+        if await update_task_if_needed(y_task, g_task_id, initiator_name, initiator_department, description, y_start_date, y_assignee_id, followers, nd):
             edited_task_count += 1
             y_task_id = y_task['key']
             db.add_or_update_task(session=DB_SESSION, g_task_id=g_task_id, y_task_id=y_task_id)
@@ -651,7 +664,7 @@ async def edit_task(y_task_id, summary=None, description=None,
                     y_assignee_id=None, task_type=None, priority=None,
                     parent=None, sprint=None, followers=None,
                     initiator_name=None, initiator_department=None,
-                    analyst=None, start=None, g_task_id=None, gandiva=None):
+                    analyst=None, start=None, g_task_id=None, gandiva=None, nd=None):
 
     # Convert the task ID to a string
     y_task_id = str(y_task_id)
@@ -670,7 +683,8 @@ async def edit_task(y_task_id, summary=None, description=None,
     if sprint: body["sprint"] = sprint
     if followers: body["followers"] = {"set": followers}
     if initiator_name: body[YA_FIELD_ID_INITIATOR] = initiator_name
-    if initiator_department: body[YA_FIELD_ID_INITIATOR_DEPARTMENT] = initiator_department
+    if initiator_department:body[YA_FIELD_ID_INITIATOR_DEPARTMENT] = initiator_department
+    if nd: body[YA_FIELD_ID_ND] = nd
     if analyst: body[YA_FIELD_ID_ANALYST] = analyst
     if start: body["start"] = start
     if g_task_id: body[YA_FIELD_ID_GANDIVA_TASK_ID] = g_task_id
@@ -721,7 +735,7 @@ async def move_task_status(y_task_id, transition_id,
     return await make_http_request('POST', url, headers=HEADERS, body=body_json)
 
 async def move_tasks_status(y_tasks, new_status):
-    """Returns sprints (as a dictionary) for the given board."""
+    """Moves tasks to new status."""
     url = f"{HOST}/v2/bulkchange/_transition"
     transition = utils.get_yandex_transition_from_status(new_status)
     task_keys = utils.extract_task_keys(y_tasks)
@@ -753,8 +767,8 @@ async def move_status_task_groups(grouped_y_tasks: dict):
     
     return results
 
-async def batch_move_tasks_status(g_tasks, ya_tasks, to_filter: bool = True):
-    grouped_ya_tasks = utils.group_tasks_by_status(g_tasks=g_tasks, y_tasks=ya_tasks, to_filter=to_filter)
+async def batch_move_tasks_status(g_tasks, y_tasks, to_filter: bool = True):
+    grouped_ya_tasks = utils.group_tasks_by_status(g_tasks=g_tasks, y_tasks=y_tasks, to_filter=to_filter)
     await move_status_task_groups(grouped_ya_tasks)
     logging.info("Task statuses are up-to-date!")
 
@@ -868,7 +882,7 @@ async def get_page_of_comments(y_task_id: str, per_page: int = 100, after_id: st
 
     return response
 
-async def get_all_comments(y_task_id: str, per_page: int = 100) -> list:
+async def get_comments(y_task_id: str, per_page: int = 100) -> list:
     """
     Retrieves all comments for the given Yandex task, handling pagination.
     
@@ -911,11 +925,11 @@ async def add_comment(y_task_id: str, comment: str, g_comment_id: str = None, au
     }
     # Convert the body to a JSON string
     body_json = json.dumps(body)
-    response_json = await make_http_request("POST", url=url, headers=HEADERS, body=body_json)
+    response = await make_http_request("POST", url=url, headers=HEADERS, body=body_json)
         # Return the response JSON or None if the request failed
-    if response_json:
-        logging.debug(f"Comment was succesfully added to task {y_task_id}!")
-        return response_json
+    if response:
+        logging.debug(f"Comment was successfully added to task {y_task_id}!")
+        return response
     else:
         logging.error(f"Comment was not added to task {y_task_id}.")
         return None
@@ -926,8 +940,6 @@ async def edit_comment(y_task_id: str, comment: str, g_comment_id: str = None, y
     # Format the comment according to the specified template
     if g_comment_id and author_name:
         comment = f"[{g_comment_id}] {author_name}:\n{comment}"
-    else:
-        comment = f"{comment}"  # In case g_comment_id or author_name are None, keep the original comment
 
     body = {
         "text": comment
@@ -936,7 +948,7 @@ async def edit_comment(y_task_id: str, comment: str, g_comment_id: str = None, y
     response = await make_http_request("PATCH", url=url, headers=HEADERS, body=json.dumps(body))
         # Return the response JSON or None if the request failed
     if response:
-        logging.debug(f"Comment was succesfully edited in task {y_task_id}!")
+        logging.debug(f"Comment was successfully edited in task {y_task_id}!")
         return response
     else:
         logging.error(f"Comment was not edited in task {y_task_id}.")
@@ -953,6 +965,11 @@ async def remove_followers_in_tasks(y_task_ids: list[str], followers: list[str])
     return response
 
 async def main(): 
+    res = await get_comments("TEA-3594")
+    for r in res:
+        text = r.get('text')
+        text = utils.remove_mentions(text)
+        print(text)
     pass
 
 

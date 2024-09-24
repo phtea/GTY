@@ -28,6 +28,7 @@ class Department(Base):
     __tablename__ = 'departments'
 
     department_name = Column(String, primary_key=True)
+    nd = Column(String)  # Add the 'НД' field here
 
     user_departments = relationship("UserDepartment", back_populates="department")
 
@@ -136,16 +137,16 @@ def add_tasks(session: Session, y_tasks: list):
     session.commit()
     logging.info(f"{total_tasks} tasks added/updated in the database.")
 
-def add_user_department_mapping(session: Session, department_user_mapping: dict):
+def add_user_department_nd_mapping(session: Session, department_user_mapping: dict):
     """
-    Adds or updates the user and department relationship in the database.
+    Adds or updates the user and department relationship in the database, considering both the department and НД fields.
 
     :param session: SQLAlchemy session object.
-    :param department_user_mapping: A dictionary where keys are department names, and values are user IDs.
+    :param department_user_mapping: A dictionary where keys are tuples (department_name, nd), and values are user IDs.
     """
     total_entries = 0
 
-    for department_name, y_user_id in department_user_mapping.items():
+    for (department_name, nd), y_user_id in department_user_mapping.items():
         # Check if the user exists in the database
         user = session.query(User).filter_by(yandex_user_id=y_user_id).one_or_none()
 
@@ -159,10 +160,15 @@ def add_user_department_mapping(session: Session, department_user_mapping: dict)
         department = session.query(Department).filter_by(department_name=department_name).one_or_none()
 
         if not department:
-            # If the department doesn't exist, create and add a new department
-            department = Department(department_name=department_name)
+            # If the department doesn't exist, create and add a new department with the НД field
+            department = Department(department_name=department_name, nd=nd)
             session.add(department)
-            logging.info(f"Department {department_name} added to the database.")
+            logging.info(f"Department {department_name} with НД {nd} added to the database.")
+        else:
+            # If the department exists, update the НД field if needed
+            if department.nd != nd:
+                department.nd = nd
+                logging.info(f"Department {department_name} updated with НД {nd}.")
 
         # Check if the relationship between the user and department already exists
         user_department = session.query(UserDepartment).filter_by(
@@ -301,6 +307,24 @@ def get_user_by_gandiva_id(session: Session, g_user_id: str):
         return None
     except Exception as e:
         logging.error(f"Error retrieving user by Gandiva ID {g_user_id}: {str(e)}")
+        return None
+
+def get_nd_by_department_name(session: Session, department_name: str):
+    """
+    Retrieves ND from the database by their department_name.
+
+    :param session: SQLAlchemy session object.
+    :param department_name: The department name to search for.
+    :return: ND (str) if found, otherwise None.
+    """
+    try:
+        department = session.query(Department).filter_by(department_name=str(department_name)).one_or_none()
+        return department.nd
+    except NoResultFound:
+        logging.debug(f"No department found with department_name {department_name}.")
+        return None
+    except Exception as e:
+        logging.error(f"Error retrieving department by department_name {department_name}: {str(e)}")
         return None
 
 def convert_gandiva_observers_to_yandex_followers(session, gandiva_observers: list[int]) -> list[int]:
