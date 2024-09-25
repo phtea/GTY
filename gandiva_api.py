@@ -395,7 +395,6 @@ async def delete_comment(g_comment_id):
 
     response = await make_http_request(method="DELETE", url=url, headers=get_headers())
 
-    # TODO: может быть, это неправильная реализация, понадобится проверка на error в словаре
     if response:
         logging.debug(f"Comment [{g_comment_id}] was successfully deleted!")
         return response

@@ -28,51 +28,7 @@ def setup_logging():
     # Set logging level
     logging.getLogger().setLevel(logging.INFO)
 
-def group_tasks_by_status(g_tasks: list, y_tasks: list, to_filter: bool = True) -> dict:
-    """
-    Groups tasks by their current Gandiva status, with an option to filter tasks where 
-    the Gandiva task has transitioned to a new status compared to the Yandex task.
-    
-    Parameters:
-    - gandiva_tasks (list): List of tasks from Gandiva.
-    - yandex_tasks (list): List of tasks from Yandex.
-    - filter (bool): If True, only tasks where Gandiva status > Yandex status are grouped. 
-                     If False, all tasks are grouped by their Gandiva status.
-    
-    Returns:
-    - dict: Dictionary grouping tasks by their Gandiva status.
-    """
-    grouped_tasks = {}
 
-    for g_task in g_tasks:
-        # Step 1: Get the Gandiva task ID and status
-        g_task_id = g_task['Id']
-        g_status = g_task['Status']
-
-        # Step 2: Get the Yandex task based on Gandiva task ID
-        y_task = next((task for task in y_tasks if task.get(yapi.YA_FIELD_ID_GANDIVA_TASK_ID) == str(g_task_id)), None)
-        if not y_task:
-            continue
-
-        # Step 3: Get the current status of the Yandex task
-        y_status = y_task.get('status').get('key')
-
-        # Step 4: Convert statuses using helper functions
-        current_g_status = g_to_y_status(g_status)
-        current_g_status_step = y_status_to_step(current_g_status)
-        current_y_status_step = y_status_to_step(y_status)
-
-        # Step 5: Apply filtering logic if required
-        if to_filter:
-            if current_g_status_step <= current_y_status_step:
-                continue
-
-        # Step 6: Group tasks by Gandiva status
-        if current_g_status not in grouped_tasks:
-            grouped_tasks[current_g_status] = []
-        grouped_tasks[current_g_status].append(y_task)
-
-    return grouped_tasks
 
 def y_status_to_y_transition(transition: str):
     return transition + "Meta"
@@ -106,6 +62,28 @@ def y_status_to_step(y_status):
         "onecancelled": 16
     }
     return status_to_step.get(y_status)
+
+def y_step_to_status(y_step):
+    step_to_status = {
+        0: "open",
+        1: "onenew",
+        2: "twowaitingfortheanalyst",
+        3: "threewritingtechnicalspecific",
+        4: "fourinformationrequired",
+        5: "fiveapprovaloftheTOR",
+        6: "sixwaitingforthedeveloper",
+        7: "sevenprogramming",
+        8: "eightreadyfortesting",
+        9: "testingbyananalystQA",
+        10: "correctionoftherevision",
+        11: "writinginstructions",
+        12: "testingbytheinitiatorinthetest",
+        13: "readyforrelease",
+        14: "acceptanceintheworkbase",
+        15: "oneclosed",
+        16: "onecancelled"
+    }
+    return step_to_status.get(y_step)
 
 def get_y_transition_from_g_status(g_status):
     status_to_transition = {
@@ -259,6 +237,8 @@ async def _make_request(session, method, url, headers, body):
         
         if status_code in [200, 201]:
             return await response.json()  # Return the JSON response
+        if status_code in [204]:
+            return True
         else:
             logging.error(f"Request to {url} failed with status {status_code}: {response_text}")
             return None
@@ -615,7 +595,7 @@ import yandex_api as yapi
 import gandiva_api as gapi
 import asyncio    
 async def main():
-    g_task  = gapi.get_task(196295)
+    g_task  = await gapi.get_task(196295)
     g_tasks = [g_task]
     pass
 

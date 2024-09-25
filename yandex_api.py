@@ -171,6 +171,7 @@ async def g_to_y_fields(g_task: dict, edit: bool, to_get_followers: bool = False
     initiator_id            = g_task['Initiator']['Id']
     initiator_department    = await gandiva_api.get_department_by_user_id(g_user_id=initiator_id)
     nd                      = None
+    g_task_detailed         = None
     if initiator_department:
         nd = db.get_nd_by_department_name(session=DB_SESSION, department_name=initiator_department)
     
@@ -189,7 +190,7 @@ async def g_to_y_fields(g_task: dict, edit: bool, to_get_followers: bool = False
     y_start_date = None
     if g_start_date:
         y_start_date = utils.g_to_y_date(g_start_date)
-
+    
     # Fields that are specific to the "add" operation
     if not edit:
         task_type = "improvement"  # Task type specific to add tasks
@@ -210,8 +211,8 @@ async def g_to_y_fields(g_task: dict, edit: bool, to_get_followers: bool = False
     
     followers = []
     if to_get_followers:
-        detailed_task = await gandiva_api.get_task(g_task_id)
-        observers = utils.extract_observers_from_detailed_task(detailed_task)
+        if not g_task_detailed: g_task_detailed = await gandiva_api.get_task(g_task_id)
+        observers = utils.extract_observers_from_detailed_task(g_task_detailed)
         followers = db.convert_gandiva_observers_to_yandex_followers(session=DB_SESSION, gandiva_observers=observers)
 
     # Fields that are specific to the "edit" operation
@@ -224,7 +225,8 @@ async def g_to_y_fields(g_task: dict, edit: bool, to_get_followers: bool = False
         'yandex_start_date': y_start_date,
         'assignee_id_yandex': y_assignee_id,
         'followers': followers,
-        'nd': nd
+        'nd': nd,
+        'attachments': g_attachments
     }
 
 # Functions
@@ -797,7 +799,7 @@ async def move_status_task_groups(grouped_y_tasks: dict):
     return results
 
 async def batch_move_tasks_status(g_tasks, y_tasks, to_filter: bool = True):
-    grouped_y_tasks = utils.group_tasks_by_status(g_tasks=g_tasks, y_tasks=y_tasks, to_filter=to_filter)
+    grouped_y_tasks = group_tasks_by_status(g_tasks=g_tasks, y_tasks=y_tasks, to_filter=to_filter)
     await move_status_task_groups(grouped_y_tasks)
     logging.info("Task statuses are up-to-date!")
 
@@ -993,9 +995,98 @@ async def remove_followers_in_tasks(y_task_ids: list[str], followers: list[str])
 
     return response
 
-async def main():
-    pass
+def group_tasks_by_status(g_tasks: list, y_tasks: list, to_filter: bool = True) -> dict:
+    """
+    Groups tasks by their current Gandiva status, with an option to filter tasks where 
+    the Gandiva task has transitioned to a new status compared to the Yandex task.
+    
+    Parameters:
+    - gandiva_tasks (list): List of tasks from Gandiva.
+    - yandex_tasks (list): List of tasks from Yandex.
+    - filter (bool): If True, only tasks where Gandiva status > Yandex status are grouped. 
+                     If False, all tasks are grouped by their Gandiva status.
+    
+    Returns:
+    - dict: Dictionary grouping tasks by their Gandiva status.
+    """
+    grouped_tasks = {}
 
+    for g_task in g_tasks:
+        # Step 1: Get the Gandiva task ID and status
+        g_task_id = g_task['Id']
+        g_status = g_task['Status']
+
+        # Step 2: Get the Yandex task based on Gandiva task ID
+        y_task = next((task for task in y_tasks if task.get(YA_FIELD_ID_GANDIVA_TASK_ID) == str(g_task_id)), None)
+        if not y_task:
+            continue
+
+        # Step 3: Get the current status of the Yandex task
+        y_status = y_task.get('status').get('key')
+
+        # Step 4: Convert statuses using helper functions
+        current_g_status = utils.g_to_y_status(g_status)
+        current_g_status_step = utils.y_status_to_step(current_g_status)
+        current_y_status_step = utils.y_status_to_step(y_status)
+        users_to_skip = [1001, 878, 1020, 852, 410]
+        waiting_analyst_id = 1018
+        if current_g_status_step == 3 and g_task.get('Contractor') and g_task.get('Contractor').get('Id'):
+            contr = g_task.get('Contractor').get('Id')
+            if contr == waiting_analyst_id or not db.get_user_by_gandiva_id(session=DB_SESSION, g_user_id=contr) and contr not in users_to_skip:
+                current_g_status_step = 2
+                current_g_status = utils.y_step_to_status(current_g_status_step)
+        # Step 5: Apply filtering logic if required
+        if to_filter:
+            if current_g_status_step <= current_y_status_step: continue
+
+        # Step 6: Group tasks by Gandiva status
+        if current_g_status not in grouped_tasks:
+            grouped_tasks[current_g_status] = []
+        grouped_tasks[current_g_status].append(y_task)
+
+    return grouped_tasks
+
+async def handle_in_work_but_waiting_for_analyst():
+    g_tasks = []
+    cursed_g_tasks = []
+    cursed_y_tasks = []
+    users_to_skip = [1001, 878, 1020, 852, 410]
+    g_tasks = await gandiva_api.get_all_tasks(gandiva_api.GroupsOfStatuses.in_progress)
+    # g_task = await gandiva_api.get_task(196204)
+    # g_tasks.append(g_task)
+    for g_task in g_tasks:
+        g_status    = g_task['Status']
+        y_status    = utils.g_to_y_status(g_status)
+        y_step      = utils.y_status_to_step(y_status)
+        if y_step == 3 and g_task.get('Contractor') and g_task.get('Contractor').get('Id'):
+            contr = g_task.get('Contractor').get('Id')
+            if contr == 1018 or not db.get_user_by_gandiva_id(session=DB_SESSION, g_user_id=contr) and contr not in users_to_skip:
+                cursed_g_tasks.append(g_task)
+    # return
+    cursed_g_task_ids = utils.extract_task_ids(cursed_g_tasks)
+    cursed_g_task_ids = list(map(str, cursed_g_task_ids))
+    y_tasks = await get_tasks(query=get_query_in_progress('DEV'))
+    for y_task in y_tasks:
+        y_task_id = y_task.get('key')
+        g_task_id = y_task.get('65819b1f16888e256be30f51--GandivaTaskId')
+        if g_task_id not in cursed_g_task_ids: continue
+        if not g_task_id:
+            print(f"No {g_task_id} in {y_task_id}...")
+            continue
+        cursed_y_tasks.append(y_task)
+    await move_tasks_status(cursed_y_tasks, 'twowaitingfortheanalyst')
+
+async def main():
+    await gandiva_api.get_access_token(gandiva_api.GAND_LOGIN, gandiva_api.GAND_PASSWORD)
+        # g_task_detailed     = await gandiva_api.get_task(g_task_id)
+        # description_html    = g_task_detailed['Description']
+        # description         = utils.html_to_yandex_format(description_html)  # Assuming a helper function to extract text from HTML
+        # g_task_detailed     = await gandiva_api.get_task(g_task_id)
+        # g_attachments       = g_task_detailed.get('Attachments')
+        # new_description     = 
+        # await edit_task(y_task_id, description=)
+    # pass
+    pass
 
 if __name__ == '__main__':
     asyncio.run(main())

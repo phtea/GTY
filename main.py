@@ -65,7 +65,7 @@ async def sync_comments(g_tasks, sync_mode: int, get_comments_execution: str = '
             
             # if comment's author is NOT YRobot and YRobot is mentioned (in summonees): DONE
             # Add comment to gandiva, continue (we don't need to add it back to Yandex, duh) DONE
-            # Unique check: if y_comment_id is in gandiva comments already -> don't add TODO
+            # Unique check: if y_comment_id is in gandiva comments already -> don't add
             # TODO: addresses: all
             if y_author_id:
                 if y_author_id != yapi.YA_ROBOT_ID and utils.is_id_in_summonees(yapi.YA_ROBOT_ID, y_summonees):
@@ -259,11 +259,11 @@ async def sync_services(queue: str, sync_mode: str, board_id: int, to_get_follow
     
     # NOTE: uncomment to add new tasks
     await yapi.add_tasks(g_tasks, queue=queue, non_closed_ya_task_ids=not_closed_task_ids)
-    
-    await yapi.edit_tasks(g_tasks, y_tasks, to_get_followers, use_summaries)
-    
     y_tasks_new = await yapi.get_tasks(query=yapi.get_query_in_progress(queue))
     await yapi.batch_move_tasks_status(g_tasks, y_tasks_new)
+    
+    await yapi.edit_tasks(g_tasks, y_tasks_new, to_get_followers, use_summaries)
+    
     
     g_finished_tasks = await gapi.get_all_tasks(gapi.GroupsOfStatuses.finished)
     if FEW_DATA:
