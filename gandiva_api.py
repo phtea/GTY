@@ -146,7 +146,7 @@ def get_headers(content_type="application/json"):
 
 # Functions
 
-async def get_task_by_id(g_task_id):
+async def get_task(g_task_id):
     """Fetch a task by ID using the GAND API."""
     content_type = "application/x-www-form-urlencoded"
     url = f"{HOST}/api/Requests/{g_task_id}"
@@ -395,7 +395,6 @@ async def delete_comment(g_comment_id):
 
     response = await make_http_request(method="DELETE", url=url, headers=get_headers())
 
-    # TODO: может быть, это неправильная реализация, понадобится проверка на error в словаре
     if response:
         logging.debug(f"Comment [{g_comment_id}] was successfully deleted!")
         return response

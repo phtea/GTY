@@ -28,53 +28,9 @@ def setup_logging():
     # Set logging level
     logging.getLogger().setLevel(logging.INFO)
 
-def group_tasks_by_status(g_tasks: list, y_tasks: list, to_filter: bool = True) -> dict:
-    """
-    Groups tasks by their current Gandiva status, with an option to filter tasks where 
-    the Gandiva task has transitioned to a new status compared to the Yandex task.
-    
-    Parameters:
-    - gandiva_tasks (list): List of tasks from Gandiva.
-    - yandex_tasks (list): List of tasks from Yandex.
-    - filter (bool): If True, only tasks where Gandiva status > Yandex status are grouped. 
-                     If False, all tasks are grouped by their Gandiva status.
-    
-    Returns:
-    - dict: Dictionary grouping tasks by their Gandiva status.
-    """
-    grouped_tasks = {}
 
-    for g_task in g_tasks:
-        # Step 1: Get the Gandiva task ID and status
-        g_task_id = g_task['Id']
-        g_status = g_task['Status']
 
-        # Step 2: Get the Yandex task based on Gandiva task ID
-        y_task = next((task for task in y_tasks if task.get(yapi.YA_FIELD_ID_GANDIVA_TASK_ID) == str(g_task_id)), None)
-        if not y_task:
-            continue
-
-        # Step 3: Get the current status of the Yandex task
-        y_status = y_task.get('status').get('key')
-
-        # Step 4: Convert statuses using helper functions
-        current_g_status = get_transition_from_gandiva_status(g_status)[:-4]
-        current_g_status_step = get_ya_status_step(current_g_status)
-        current_ya_status_step = get_ya_status_step(y_status)
-
-        # Step 5: Apply filtering logic if required
-        if to_filter:
-            if current_g_status_step <= current_ya_status_step:
-                continue
-
-        # Step 6: Group tasks by Gandiva status
-        if current_g_status not in grouped_tasks:
-            grouped_tasks[current_g_status] = []
-        grouped_tasks[current_g_status].append(y_task)
-
-    return grouped_tasks
-
-def get_yandex_transition_from_status(transition: str):
+def y_status_to_y_transition(transition: str):
     return transition + "Meta"
 
 def extract_task_keys(tasks: list) -> list:
@@ -85,7 +41,7 @@ def extract_task_ids(tasks: list) -> list:
     """Extracts the 'Id' values from a list of tasks."""
     return [task.get('Id') for task in tasks if 'Id' in task]
 
-def get_ya_status_step(ya_status):
+def y_status_to_step(y_status):
     status_to_step = {
         "open": 0,
         "onenew": 1,
@@ -105,9 +61,31 @@ def get_ya_status_step(ya_status):
         "oneclosed": 15,
         "onecancelled": 16
     }
-    return status_to_step.get(ya_status)
+    return status_to_step.get(y_status)
 
-def get_transition_from_gandiva_status(gandiva_status):
+def y_step_to_status(y_step):
+    step_to_status = {
+        0: "open",
+        1: "onenew",
+        2: "twowaitingfortheanalyst",
+        3: "threewritingtechnicalspecific",
+        4: "fourinformationrequired",
+        5: "fiveapprovaloftheTOR",
+        6: "sixwaitingforthedeveloper",
+        7: "sevenprogramming",
+        8: "eightreadyfortesting",
+        9: "testingbyananalystQA",
+        10: "correctionoftherevision",
+        11: "writinginstructions",
+        12: "testingbytheinitiatorinthetest",
+        13: "readyforrelease",
+        14: "acceptanceintheworkbase",
+        15: "oneclosed",
+        16: "onecancelled"
+    }
+    return step_to_status.get(y_step)
+
+def get_y_transition_from_g_status(g_status):
     status_to_transition = {
         3: "onenewMeta",
         4: "fourinformationrequiredMeta",
@@ -121,16 +99,31 @@ def get_transition_from_gandiva_status(gandiva_status):
         12: "twowaitingfortheanalystMeta",
         13: "threewritingtechnicalspecificMeta"
     }
-    return status_to_transition.get(gandiva_status)
+    return status_to_transition.get(g_status)
 
+def g_to_y_status(g_status):
+    g_status_to_y_status = {
+        3: "onenew",
+        4: "fourinformationrequired",
+        5: "onecancelled",
+        6: "threewritingtechnicalspecific",
+        7: "onecancelled",
+        8: "acceptanceintheworkbase",
+        9: "oneclosed",
+        10: "twowaitingfortheanalyst",
+        11: "twowaitingfortheanalyst",
+        12: "twowaitingfortheanalyst",
+        13: "threewritingtechnicalspecific"
+    }
+    return g_status_to_y_status.get(g_status)
 
 def extract_text_from_html(html):
     soup = BeautifulSoup(html, "html.parser")
     return soup.get_text()
 
-def get_all_unique_initiators(gandiva_tasks):
+def get_all_unique_initiators(g_tasks):
     """Extract unique Initiator IDs"""
-    unique_initiator_ids = {task['Initiator']['Id'] for task in gandiva_tasks}
+    unique_initiator_ids = {task['Initiator']['Id'] for task in g_tasks}
 
     # Convert to a list (if needed)
     unique_initiator_ids_list = list(unique_initiator_ids)
@@ -188,7 +181,7 @@ def html_to_yandex_format(html):
     # Final text extraction
     return soup.get_text().strip()
 
-def gandiva_to_yandex_date(gandiva_date: str) -> str:
+def g_to_y_date(gandiva_date: str) -> str:
     """
     Converts a Gandiva date (with time and timezone) to Yandex date (only date part).
     Args:
@@ -244,6 +237,8 @@ async def _make_request(session, method, url, headers, body):
         
         if status_code in [200, 201]:
             return await response.json()  # Return the JSON response
+        if status_code in [204]:
+            return True
         else:
             logging.error(f"Request to {url} failed with status {status_code}: {response_text}")
             return None
@@ -400,7 +395,7 @@ def extract_unique_gandiva_users(g_tasks: list) -> dict:
 
     return unique_users
 
-def map_it_uids_to_gandiva_ids(it_uids: dict, g_users: dict) -> dict:
+def map_it_uids_to_g_ids(it_uids: dict, g_users: dict) -> dict:
     """
     Maps Yandex user IDs to Gandiva user IDs based on email matching.
     
@@ -427,6 +422,7 @@ def extract_task_id_from_summary(summary):
     :return: The extracted task ID, or None if no match is found.
     """
     # Use a regex to match the task ID at the start of the summary
+    summary = summary.strip()
     match = re.match(r'^(\d+)', summary)
     
     if match:
@@ -435,17 +431,17 @@ def extract_task_id_from_summary(summary):
         return None
 
 
-def extract_task_ids_from_summaries(ya_tasks):
+def extract_task_ids_from_summaries(y_tasks):
     """
-    Extracts task IDs from the 'summary' field of each task in ya_tasks and detects duplicates.
+    Extracts task IDs from the 'summary' field of each task in y_tasks and detects duplicates.
 
-    :param ya_tasks: List of task dictionaries containing 'summary' and 'key' fields.
+    :param y_tasks: List of task dictionaries containing 'summary' and 'key' fields.
     :return: A dictionary with task_id as keys and ya_task_key as values.
     """
     task_info_dict = {}
     seen_task_ids = set()  # To track task IDs we've already encountered
 
-    for task in ya_tasks:
+    for task in y_tasks:
         summary = task.get('summary', '')
         ya_task_key = task.get('key')  # Extract the 'key' field
 
@@ -471,17 +467,17 @@ def extract_gandiva_task_id_from_task(task):
     return task.get(yapi.YA_FIELD_ID_GANDIVA_TASK_ID)
 
 
-def extract_task_ids_from_gandiva_task_id(ya_tasks):
+def extract_task_ids_from_gandiva_task_id(y_tasks):
     """
-    Extracts task IDs from the 'GandivaTaskId' field of each task in ya_tasks and detects duplicates.
+    Extracts task IDs from the 'GandivaTaskId' field of each task in y_tasks and detects duplicates.
 
-    :param ya_tasks: List of task dictionaries containing 'GandivaTaskId' and 'key' fields.
+    :param y_tasks: List of task dictionaries containing 'GandivaTaskId' and 'key' fields.
     :return: A dictionary with gandiva_task_id as keys and ya_task_key as values.
     """
     task_info_dict = {}
     seen_gandiva_task_ids = set()  # To track task IDs we've already encountered
 
-    for task in ya_tasks:
+    for task in y_tasks:
         gandiva_task_id = extract_gandiva_task_id_from_task(task)
         ya_task_key = task.get('key')  # Extract the 'key' field
 
@@ -494,17 +490,17 @@ def extract_task_ids_from_gandiva_task_id(ya_tasks):
 
     return task_info_dict
 
-def find_unmatched_tasks(ya_tasks, extracted_task_ids):
+def find_unmatched_tasks(y_tasks, extracted_task_ids):
     """
     Finds tasks whose IDs could not be extracted from the 'summary' field.
 
-    :param ya_tasks: List of task dictionaries containing 'summary' fields.
+    :param y_tasks: List of task dictionaries containing 'summary' fields.
     :param extracted_task_ids: Set of task IDs that were successfully extracted.
     :return: List of tasks (summaries) that were not found during extraction.
     """
     unmatched_tasks = []
 
-    for task in ya_tasks:
+    for task in y_tasks:
         summary = task.get('summary', '')
         
         # Extract the task ID using regex
@@ -599,7 +595,7 @@ import yandex_api as yapi
 import gandiva_api as gapi
 import asyncio    
 async def main():
-    g_task  = gapi.get_task_by_id(196295)
+    g_task  = await gapi.get_task(196295)
     g_tasks = [g_task]
     pass
 

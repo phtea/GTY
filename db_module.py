@@ -108,7 +108,7 @@ def add_task_no_commit(session: Session, y_task: dict):
     if not (g_task_id or g_task_id_summary):
         logging.debug(f"No Gandiva ID found for Yandex task {y_task_id}, skipping.")
         return
-    g_task_id = g_task_id_summary
+    g_task_id = g_task_id_summary if g_task_id is None else g_task_id
     # Check if the task already exists by task_id_yandex
     existing_task = session.query(Task).filter_by(task_id_yandex=y_task_id).one_or_none()
 
