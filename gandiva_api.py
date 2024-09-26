@@ -21,9 +21,12 @@ GAND_ROBOT_ID           = config.getint('Gandiva', 'robot_id')
 MAX_CONCURRENT_REQUESTS = config.getint('Gandiva', 'max_concurrent_requests')
 
 class GroupsOfStatuses:
-    in_progress = [3, 4, 6, 8, 10, 11, 12, 13]
-    finished = [5, 7, 9]
-    _all = [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+    in_progress             = [3, 4, 6, 8, 13]
+    in_progress_or_waiting  = [3, 4, 6, 8, 10, 11, 12, 13]
+    waiting                 = [10, 11, 12]
+    waiting_or_finished     = [5, 7, 9, 10, 11, 12]
+    finished                = [5, 7, 9]
+    _all                    = [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
 
 
 
@@ -263,7 +266,7 @@ async def get_comments_for_tasks_consecutively(g_task_ids: list[int]):
 
     return task_comments
 
-async def get_all_tasks(statutes: list[int] = [3, 4, 6, 8, 10, 11]):
+async def get_tasks(statutes: list[int] = [3, 4, 6, 8, 10, 11]):
     logging.info("Fetching tasks...")
     all_requests = []
     
@@ -297,17 +300,27 @@ async def get_all_tasks(statutes: list[int] = [3, 4, 6, 8, 10, 11]):
 
     return all_requests
 
+def extract_tasks_by_status(g_tasks, statuses):
+    """
+    Extract tasks that have a status in the provided list of statuses.
+
+    :param g_tasks: List of task dictionaries.
+    :param statuses: List of statuses to filter tasks by.
+    :return: List of tasks that match the provided statuses.
+    """
+    return [task for task in g_tasks if task.get('Status') in statuses]
+
 # Comments functionality
-async def add_comment(g_task_id, text, y_comment_id, author_name, addressees=None):
+async def add_comment(g_task_id, text, y_comment_id, author_name, g_addressees=None):
     """Fetch comments for a list of tasks one at a time."""
     url = f"{HOST}/api/Requests/{g_task_id}/Comments"
     # Format the comment according to the specified template
     if y_comment_id and author_name:
-        text = f"[{y_comment_id}] {author_name}:\n{text}"
+        text = f"[{y_comment_id}] {author_name}:<br>{text}"
         
     body = {"Text": text}
 
-    if addressees: body["Addressees"] = addressees
+    if g_addressees: body["Addressees"] = g_addressees
 
     response = await make_http_request(
         method="POST", 
@@ -321,6 +334,31 @@ async def add_comment(g_task_id, text, y_comment_id, author_name, addressees=Non
         return response
     else:
         logging.error(f"Comment was not added to task {g_task_id}.")
+        return None
+
+async def edit_comment(g_comment_id, y_comment_id, text, author_name, g_addressees=None):
+    """Fetch comments for a list of tasks one at a time."""
+    url = f"{HOST}/api/Common/Comments/{g_comment_id}"
+    # Format the comment according to the specified template
+    if y_comment_id and author_name:
+        text = f"[{y_comment_id}] {author_name}:<br>{text}"
+        
+    body = {"Text": text}
+
+    if g_addressees: body["Addressees"] = g_addressees
+
+    response = await make_http_request(
+        method="PUT", 
+        url=url, 
+        headers=get_headers(),
+        body=json.dumps(body)
+    )
+
+    if response:
+        logging.debug(f"Comment {g_comment_id} was edited!")
+        return response
+    else:
+        logging.error(f"Comment {g_comment_id} was not edited.")
         return None
 
 async def edit_task(g_task_id: int, last_modified_date: str, required_start_date: str = None):
@@ -404,7 +442,7 @@ async def delete_comment(g_comment_id):
 
 async def handle_tasks_in_work_but_waiting_for_analyst(needed_date):
     """needed_date in format: 2025-01-01T00:00:00+03:00"""
-    tasks = await get_all_tasks(statutes=[6, 11, 13])
+    tasks = await get_tasks(statutes=[6, 11, 13])
     waiting_for_analyst_id = 1018
     needed_tasks = []
     for task in tasks:
