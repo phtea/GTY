@@ -5,6 +5,9 @@ import urllib.parse
 import configparser
 import json
 from utils import make_http_request
+import db_module as db
+import utils
+
 
 # Path to the .ini file
 CONFIG_PATH = 'config.ini'
@@ -19,6 +22,10 @@ GAND_PASSWORD           = config.get('Gandiva', 'password')
 GAND_PROGRAMMER_ID      = config.getint('Gandiva', 'programmer_id')
 GAND_ROBOT_ID           = config.getint('Gandiva', 'robot_id')
 MAX_CONCURRENT_REQUESTS = config.getint('Gandiva', 'max_concurrent_requests')
+DB_URL                  = config.get('Database', 'url')
+WAITING_ANALYST_ID      = 1018
+DB_ENGINE               = db.create_database(DB_URL)
+DB_SESSION              = db.get_session(DB_ENGINE)
 
 class GroupsOfStatuses:
     in_progress             = [3, 4, 6, 8, 13]
@@ -382,13 +389,13 @@ async def edit_task(g_task_id: int, last_modified_date: str, required_start_date
         logging.error(f"Task {g_task_id} was not edited.")
         return None
 
-async def edit_task_required_start_date(g_task_id: int, last_modified_date: str, required_start_date: str = None):
+async def edit_task_required_start_date(g_task_id: int, last_modified_date: str, required_start_date: str):
     """edit task in Gandiva"""
     url = f"{HOST}/api/Requests/{g_task_id}/RequiredStartDate"
     body = {
-        "LastModifiedDate": last_modified_date
+        "LastModifiedDate": last_modified_date,
+        "RequiredStartDate": required_start_date
     }
-    if required_start_date: body["RequiredStartDate"] = required_start_date
     
     response = await make_http_request(
         method="PUT", 
@@ -401,6 +408,27 @@ async def edit_task_required_start_date(g_task_id: int, last_modified_date: str,
         return response
     else:
         logging.error(f"Task's RequiredStartDate {g_task_id} was not edited.")
+        return None
+
+async def edit_task_contractor(g_task_id: int, last_modified_date: str, contractor: str):
+    """edit task in Gandiva"""
+    url = f"{HOST}/api/Requests/{g_task_id}/Contractor"
+    body = {
+        "LastModifiedDate": last_modified_date,
+        "Contractor": {'Id': contractor}
+    }
+
+    response = await make_http_request(
+        method="PUT", 
+        url=url, 
+        headers=get_headers(),
+        body=json.dumps(body))
+    
+    if response:
+        logging.debug(f"Task's Contractor {g_task_id} was successfully edited!")
+        return response
+    else:
+        logging.error(f"Task's Contractor {g_task_id} was not edited.")
         return None
 
 async def delete_comment(g_comment_id, text, addressees=None):
@@ -456,8 +484,57 @@ async def handle_tasks_in_work_but_waiting_for_analyst(needed_date):
 import time # using for timing functions
 async def main():
     await get_access_token(GAND_LOGIN, GAND_PASSWORD)
+    g_tasks = await get_tasks(GroupsOfStatuses.in_progress_or_waiting)
+    await handle_waiting_for_analyst_or_no_contractor_no_requiered_start_date(g_tasks)
     pass
 
+async def handle_waiting_for_analyst_or_no_contractor_no_requiered_start_date(g_tasks):
+    case = 'case: Task with contractor = "Waiting For Analyst" or None, without Requiered Start Date'
+    next_year = utils.get_next_year_datetime()
+    g_task_anomalies = [g for g in g_tasks if not g['Contractor'] or g['Contractor']['Id'] == WAITING_ANALYST_ID and not g['RequiredStartDate']]
+    if not g_task_anomalies:
+        logging.info(f"No anomalies found [{case}]!")
+        return True
+    count = 0
+    for g_task_anomaly in g_task_anomalies:
+        g_task_id               = g_task_anomaly['Id']
+        last_modified_date      = g_task_anomaly['LastModifiedDate']
+        initiator_id            = g_task_anomaly.get('Initiator', {}).get('Id')
+        department              = await get_department_by_user_id(initiator_id)
+        y_analyst               = db.get_user_id_by_department(session=DB_SESSION, department_name=department)
+        user                    = db.get_user_by_yandex_id(DB_SESSION, y_analyst)
+        g_analyst_id            = None
+        if user: g_analyst_id   = user.gandiva_user_id
+        res_contractor          = None
+        res_date                = None
+
+        if not g_task_anomaly['RequiredStartDate']:
+            res_date = await edit_task_required_start_date(g_task_id, last_modified_date, next_year)
+            if res_date:
+                logging.info(f"Changed required start date in task {g_task_id}!")
+            else:
+                logging.warning(f"Date was not changed in {g_task_id}, skipping...")
+                continue
+
+        if not g_analyst_id:
+            logging.warning(f"No analyst found for task {g_task_id}, skipping [edit contractor]...")
+            continue
+
+        g_task_anomaly      = await get_task(g_task_id)
+        last_modified_date  = g_task_anomaly['LastModifiedDate']
+        res_contractor      = await edit_task_contractor(g_task_id, last_modified_date, g_analyst_id)
+        if res_contractor:
+            logging.info(f"Changed contractor to analyst in task {g_task_id}!")
+        else:
+            logging.error(f"Failed changing contractor to analyst in task {g_task_id}.")
+        if res_contractor or res_date:
+            count += 1
+    logging.info(f'Handled {count} anomaly tasks [{case}]')
+    # If all anomalies fixed -> return True, else False
+    if len(g_task_anomalies) == count:
+        return True
+    else:
+        return False
+
 if __name__ == '__main__':
-    # get_access_token(GAND_LOGIN, GAND_PASSWORD)
     asyncio.run(main())

@@ -6,6 +6,8 @@ from logging.handlers import RotatingFileHandler
 import aiohttp
 import datetime
 import warnings
+import markdown
+
 warnings.filterwarnings("ignore", category=MarkupResemblesLocatorWarning)
 
 GANDIVA_HOST = "https://gandiva.s-stroy.ru"
@@ -182,7 +184,7 @@ def html_to_yandex_format(html):
     # Final text extraction
     return soup.get_text().strip()
 
-def markdown_to_html(markdown_text):
+def markdown_to_html_old(markdown_text):
     """
     Converts markdown-style links and images back to HTML format.
     Handles links, images, and newlines properly.
@@ -215,6 +217,52 @@ def markdown_to_html(markdown_text):
     soup = BeautifulSoup(html_text, "html.parser")
     
     return str(soup)
+
+def markdown_to_html(markdown_text):
+    """
+    Converts markdown-style links and images back to HTML format.
+    Handles links, images, and newlines properly.
+    Prepend YANDEX_HOST if the link doesn't have a host (i.e., it's a relative URL).
+    """
+    html_text = markdown.markdown(markdown_text)
+    html_text = prepend_host_to_relative_links(html_text, YANDEX_HOST)
+    # html_text = wrap_raw_urls_in_html(html_text, YANDEX_HOST)
+    html_text = handle_raw_urls_to_html(html_text)
+    
+    return html_text
+
+def prepend_host_to_relative_links(html_text, host):
+    """
+    Adds host to relative URLs in <a> and <img> tags in the given HTML content.
+    """
+    soup = BeautifulSoup(html_text, "html.parser")
+
+    # Find all <a> tags
+    for a in soup.find_all('a'):
+        href = a.get('href', '')
+        if not re.match(r'^https?://', href):  # If the href doesn't start with http(s), it's relative
+            a['href'] = host + href  # Prepend the host to the href
+
+    # Find all <img> tags
+    for img in soup.find_all('img'):
+        src = img.get('src', '')
+        if not re.match(r'^https?://', src):  # If the src doesn't start with http(s), it's relative
+            img['src'] = host + src  # Prepend the host to the src
+
+    return str(soup)
+
+def handle_raw_urls_to_html(text):
+    url_pattern = r'(?<!["\'])\bhttps?://[^\s<>"]+'  # Regex to match raw URLs not inside quotes or tags
+    
+    # Function to replace raw URLs with the link itself
+    def replace_with_attachment(match):
+        url = match.group(0)  # Full URL match
+        return f'<a href="{url}">{url}</a>'  # Use the URL as the link text
+    
+    # Use re.sub to replace only raw URLs
+    html_text = re.sub(url_pattern, replace_with_attachment, text)
+    
+    return html_text
 
 def g_to_y_date(gandiva_date: str) -> str:
     """
@@ -661,18 +709,22 @@ def format_attachments(g_attachments):
 
     return attachments_text
 
+def get_next_year_datetime():
+    # Get the current year
+    current_year = datetime.datetime.now().year
+    
+    # Calculate the next year
+    next_year = current_year + 1
+    
+    # Return the next year's January 1st in the desired format
+    next_year_datetime = f"{next_year}-01-01T00:00:00+03:00"
+    
+    return next_year_datetime
 
 import yandex_api as yapi
 import gandiva_api as gapi
 import asyncio    
-async def main():
-    markdown_input = """Сообщение с картинкой [Картинка 1](/Resources/ProcessCommentImages?src=file:///F:/ClientFiles/success/Comment1/2024/196295/8fb51744-ea69-430d-ad49-d94d2cf8b6db/image.jpeg)
-    и с документом [Файл: Тестовый документ Word.docx](https://gandiva.s-stroy.ru/Resources/Attachment/3bf9ed60-a271-438f-86a2-ac2c91563513)
-    А также с переносом строки.
-    А также с переносом строки Shift+Enter"""
-
-    html_output = markdown_to_html(markdown_input)
-    print(html_output)
+async def main():        
     pass
 
 

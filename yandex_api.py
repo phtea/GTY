@@ -1042,7 +1042,7 @@ def group_tasks_by_status(g_tasks: list, y_tasks: list, to_filter: bool = True) 
         current_g_status_step = utils.y_status_to_step(current_g_status)
         current_y_status_step = utils.y_status_to_step(y_status)
         users_to_skip = [1001, 878, 1020, 852, 410]
-        waiting_analyst_id = 1018
+        waiting_analyst_id = gandiva_api.WAITING_ANALYST_ID
         if current_g_status_step == 3 and g_task.get('Contractor') and g_task.get('Contractor').get('Id'):
             contr = g_task.get('Contractor').get('Id')
             if contr == waiting_analyst_id or not db.get_user_by_gandiva_id(session=DB_SESSION, g_user_id=contr) and contr not in users_to_skip:

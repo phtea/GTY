@@ -238,18 +238,18 @@ async def sync_services(queue: str, sync_mode: str, board_id: int, to_get_follow
     await gapi.get_access_token(gapi.GAND_LOGIN, gapi.GAND_PASSWORD)
 
 
-    # temp
-    g_task  = await gapi.get_task(196295)
-    g_tasks = [g_task]
-    await sync_comments(g_tasks, sync_mode)
-    await asyncio.sleep(30)
-    return
-    # temp
+    # # temp
+    # g_task  = await gapi.get_task(196295)
+    # g_tasks = [g_task]
+    # await sync_comments(g_tasks, sync_mode)
+    # await asyncio.sleep(30)
+    # return
+    # # temp
     g_tasks_all                     = await gapi.get_tasks(gapi.GroupsOfStatuses._all) # all
 
     g_tasks_in_progress             = gapi.extract_tasks_by_status(g_tasks_all, gapi.GroupsOfStatuses.in_progress) # full sync [3, 4, 6, 8, 13]
-    # g_tasks_waiting_or_finished     = gapi.extract_tasks_by_status(g_tasks_all, gapi.GroupsOfStatuses.waiting_or_finished) # move status
     g_tasks_in_progress_or_waiting  = gapi.extract_tasks_by_status(g_tasks_all, gapi.GroupsOfStatuses.in_progress_or_waiting) # add
+    # g_tasks_waiting_or_finished     = gapi.extract_tasks_by_status(g_tasks_all, gapi.GroupsOfStatuses.waiting_or_finished) # move status
 
     # Don't make separate requests, instead get all tasks and filter what we need by statuses
     # g_tasks_in_progress             = await gapi.get_tasks(gapi.GroupsOfStatuses.in_progress) # full sync [3, 4, 6, 8, 13]
@@ -283,9 +283,13 @@ async def sync_services(queue: str, sync_mode: str, board_id: int, to_get_follow
     # await yapi.batch_move_tasks_status(g_tasks_waiting_or_finished, y_tasks)
     
     await yapi.edit_tasks(g_tasks_in_progress, y_tasks_new, to_get_followers, use_summaries)
-    await sync_comments(g_tasks_in_progress, sync_mode)
-
-    await yapi.create_weekly_release_sprint(board_id)
+    
+    # Handling different exceptions here
+    await gapi.handle_waiting_for_analyst_or_no_contractor_no_requiered_start_date(g_tasks=g_tasks_in_progress_or_waiting)
+    
+    # NOTE: Uncomment to enable!
+    # await sync_comments(g_tasks_in_progress, sync_mode)
+    # await yapi.create_weekly_release_sprint(board_id)
 
     logging.info("Sync finished successfully!")
 
