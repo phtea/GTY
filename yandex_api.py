@@ -194,8 +194,6 @@ async def g_to_y_fields(g_task: dict, edit: bool, to_get_followers: bool = False
     # Fields that are specific to the "add" operation
     if not edit:
         task_type = "improvement"  # Task type specific to add tasks
-        g_task_detailed = await gandiva_api.get_task(g_task_id)
-        g_attachments = g_task_detailed.get('Attachments')
         return {
             'gandiva_task_id': g_task_id,
             'initiator_name': initiator_name,
@@ -206,7 +204,6 @@ async def g_to_y_fields(g_task: dict, edit: bool, to_get_followers: bool = False
             'initiator_department': initiator_department,
             'yandex_start_date': y_start_date,
             'nd': nd,
-            'attachments': g_attachments
         }
     
     followers = []
@@ -225,8 +222,7 @@ async def g_to_y_fields(g_task: dict, edit: bool, to_get_followers: bool = False
         'yandex_start_date': y_start_date,
         'assignee_id_yandex': y_assignee_id,
         'followers': followers,
-        'nd': nd,
-        'attachments': g_attachments
+        'nd': nd
     }
 
 # Functions
@@ -254,7 +250,7 @@ async def get_page_of_tasks(queue: str = None,
                             expand: str = None,
                             login: str = None,
                             page_number: int = 1,
-                            per_page: int = 5000):
+                            per_page: int = 5000) -> dict:
     # Initialize the request body
     body = {}
 
@@ -348,18 +344,26 @@ async def get_tasks(queue: str = None, keys: str | list[str] = None,
     if not queue and not query:
         raise ValueError("Queue or query have to be passed to this function.")
 
+    
+
+    # tasks_count = await get_tasks_count(queue=queue, filter=filter, query=query,assignee=login)
+    per_page = 2000
+    all_y_tasks = []
     page_number = 1
+    while True:
+        y_tasks = await get_page_of_tasks(queue=queue, keys=keys, filter=filter,query=query,
+                                          order=order, expand=expand,login=login,page_number=page_number,
+                                          per_page=per_page)
+        if y_tasks is None:
+            raise ValueError("[429] Too many requests.")
+        all_y_tasks.extend(y_tasks)
+        if len(y_tasks) < per_page: break
+        page_number += 1
 
-    tasks_count = await get_tasks_count(queue=queue, filter=filter, query=query,assignee=login)
-
-    yandex_tasks = await get_page_of_tasks(
-        queue=queue, keys=keys, filter=filter,
-        query=query, order=order, expand=expand,
-        login=login,page_number=page_number,per_page=tasks_count)
 
     # Append the tasks to the all_yandex_tasks list
 
-    return yandex_tasks
+    return all_y_tasks
 
 async def get_tasks_by_gandiva_ids(g_ids: list[str]) -> dict:
     """Get tasks by their Gandiva IDs"""
@@ -515,7 +519,8 @@ async def add_tasks(g_tasks: list[dict], queue: str, non_closed_ya_task_ids: dic
         task_type           = fields.get('task_type')
         start               = fields.get('yandex_start_date')
         nd                  = fields.get('nd')
-        g_attachments       = fields.get('attachments')
+        
+        new_description     = await description_with_attachments(g_task_id, description)
 
         # TODO: add g_attachments to the end of description!
         g_status            = g_task['Status']
@@ -524,7 +529,7 @@ async def add_tasks(g_tasks: list[dict], queue: str, non_closed_ya_task_ids: dic
 
         # Call add_task and check if a task was successfully added
         result = await add_task(g_task_id, initiator_name, initiator_department=initiator_department,
-                                description=description, queue=queue, y_assignee=y_assignee,
+                                description=new_description, queue=queue, y_assignee=y_assignee,
                                 task_type=task_type, start=start, nd=nd, y_step=y_step)
 
         # Check if the result indicates the task was added
@@ -584,7 +589,7 @@ async def update_task_if_needed(y_task, g_task_id, initiator_name, initiator_dep
     edit_fields = {
         'edit_initiator_name': edit_field_if_empty(y_task, YA_FIELD_ID_INITIATOR, initiator_name),
         'edit_initiator_department': edit_field_if_empty(y_task, YA_FIELD_ID_INITIATOR_DEPARTMENT, initiator_department),
-        'edit_description': edit_field_if_empty(y_task, 'description', description),
+        'edit_description': edit_field_if_different_content(y_task, 'description', description),
         'edit_yandex_start_date': edit_field_if_empty(y_task, 'start', y_start_date),
         'edit_assignee_yandex_id': edit_assignee,
         'edit_analyst': None,
@@ -682,15 +687,23 @@ async def edit_tasks(g_tasks, y_tasks, to_get_followers, use_summaries=False):
         g_status                = g_task['Status']
         y_status                = utils.g_to_y_status(g_status)
         y_step                  = utils.y_status_to_step(y_status)
-       
 
-        if await update_task_if_needed(y_task, g_task_id, initiator_name, initiator_department, description, y_start_date, y_assignee_id, followers, nd, y_step):
+        new_description = await description_with_attachments(g_task_id, description)
+
+        if await update_task_if_needed(y_task, g_task_id, initiator_name, initiator_department, new_description, y_start_date, y_assignee_id, followers, nd, y_step):
             edited_task_count += 1
             y_task_id = y_task['key']
             db.add_or_update_task(session=DB_SESSION, g_task_id=g_task_id, y_task_id=y_task_id)
 
     # Log the total number of edited tasks
     logging.info(f"Total tasks edited: {edited_task_count}")
+
+async def description_with_attachments(g_task_id, description):
+    g_task_detailed     = await gandiva_api.get_task(g_task_id)
+    g_attachments       = g_task_detailed.get('Attachments')
+    attachments_text    = utils.format_attachments(g_attachments)
+    new_description     = description + "\n\n" + attachments_text
+    return new_description
 
 
 async def edit_task(y_task_id, summary=None, description=None,y_assignee_id=None, task_type=None, priority=None,
@@ -1029,7 +1042,7 @@ def group_tasks_by_status(g_tasks: list, y_tasks: list, to_filter: bool = True) 
         current_g_status_step = utils.y_status_to_step(current_g_status)
         current_y_status_step = utils.y_status_to_step(y_status)
         users_to_skip = [1001, 878, 1020, 852, 410]
-        waiting_analyst_id = 1018
+        waiting_analyst_id = gandiva_api.WAITING_ANALYST_ID
         if current_g_status_step == 3 and g_task.get('Contractor') and g_task.get('Contractor').get('Id'):
             contr = g_task.get('Contractor').get('Id')
             if contr == waiting_analyst_id or not db.get_user_by_gandiva_id(session=DB_SESSION, g_user_id=contr) and contr not in users_to_skip:
@@ -1051,7 +1064,7 @@ async def handle_in_work_but_waiting_for_analyst():
     cursed_g_tasks = []
     cursed_y_tasks = []
     users_to_skip = [1001, 878, 1020, 852, 410]
-    g_tasks = await gandiva_api.get_all_tasks(gandiva_api.GroupsOfStatuses.in_progress)
+    g_tasks = await gandiva_api.get_tasks(gandiva_api.GroupsOfStatuses.in_progress)
     # g_task = await gandiva_api.get_task(196204)
     # g_tasks.append(g_task)
     for g_task in g_tasks:
@@ -1078,13 +1091,18 @@ async def handle_in_work_but_waiting_for_analyst():
 
 async def main():
     await gandiva_api.get_access_token(gandiva_api.GAND_LOGIN, gandiva_api.GAND_PASSWORD)
-        # g_task_detailed     = await gandiva_api.get_task(g_task_id)
-        # description_html    = g_task_detailed['Description']
-        # description         = utils.html_to_yandex_format(description_html)  # Assuming a helper function to extract text from HTML
-        # g_task_detailed     = await gandiva_api.get_task(g_task_id)
-        # g_attachments       = g_task_detailed.get('Attachments')
-        # new_description     = 
-        # await edit_task(y_task_id, description=)
+    g_task_id = str(196204)
+    g_task_detailed     = await gandiva_api.get_task(g_task_id)
+    description_html    = g_task_detailed['Description']
+    description         = utils.html_to_yandex_format(description_html)  # Assuming a helper function to extract text from HTML
+    g_task_detailed     = await gandiva_api.get_task(g_task_id)
+    g_attachments       = g_task_detailed.get('Attachments')
+    attachments_text    = utils.format_attachments(g_attachments)
+    new_description     = description + "\n" + attachments_text
+    print(new_description)
+    y_task = await get_tasks_by_gandiva_ids([g_task_id])
+    y_task_id = y_task[0].get('key')
+    await edit_task(y_task_id, description=new_description)
     # pass
     pass
 

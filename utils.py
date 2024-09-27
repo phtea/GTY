@@ -6,9 +6,12 @@ from logging.handlers import RotatingFileHandler
 import aiohttp
 import datetime
 import warnings
+import markdown
+
 warnings.filterwarnings("ignore", category=MarkupResemblesLocatorWarning)
 
 GANDIVA_HOST = "https://gandiva.s-stroy.ru"
+YANDEX_HOST     = "https://tracker.yandex.ru"
 
 def setup_logging():
     # 10 Megabytes
@@ -180,6 +183,86 @@ def html_to_yandex_format(html):
 
     # Final text extraction
     return soup.get_text().strip()
+
+def markdown_to_html_old(markdown_text):
+    """
+    Converts markdown-style links and images back to HTML format.
+    Handles links, images, and newlines properly.
+    Prepend YANDEX_HOST if the link doesn't have a host (i.e., it's a relative URL).
+    """
+
+    # Remove leading '!' for image links (to just show the link instead of embedding the image)
+    markdown_text = markdown_text.replace("![" , "[")  # Remove '!' from the markdown images
+
+    # Convert markdown links back to HTML <a> tags
+    markdown_text = re.sub(
+        r'\[([^\]]+)\]\(([^)]+)\)', 
+        lambda match: f'<a href="{match.group(2) if re.match(r"^https?://", match.group(2)) else YANDEX_HOST + match.group(2)}">{match.group(1)}</a>',
+        markdown_text
+    )
+    
+    
+    # Convert markdown image links back to HTML <img> tags (with a placeholder for alt text)
+    markdown_text = re.sub(
+        r'\[Картинка (\d+)\]\(([^)]+)\)',
+        lambda match: f'<img src="{match.group(2) if re.match(r"^https?://", match.group(2)) else YANDEX_HOST + match.group(2)}" alt="Картинка {match.group(1)}" />',
+        markdown_text
+    )
+
+    # Convert newlines to <br> or wrap paragraphs in <p> tags
+    paragraphs = markdown_text.split("\n")
+    html_text = "".join([f"<p>{p}</p>" if p else "<br />" for p in paragraphs])
+
+    # Use BeautifulSoup to clean and format the final HTML output
+    soup = BeautifulSoup(html_text, "html.parser")
+    
+    return str(soup)
+
+def markdown_to_html(markdown_text):
+    """
+    Converts markdown-style links and images back to HTML format.
+    Handles links, images, and newlines properly.
+    Prepend YANDEX_HOST if the link doesn't have a host (i.e., it's a relative URL).
+    """
+    html_text = markdown.markdown(markdown_text)
+    html_text = prepend_host_to_relative_links(html_text, YANDEX_HOST)
+    # html_text = wrap_raw_urls_in_html(html_text, YANDEX_HOST)
+    html_text = handle_raw_urls_to_html(html_text)
+    
+    return html_text
+
+def prepend_host_to_relative_links(html_text, host):
+    """
+    Adds host to relative URLs in <a> and <img> tags in the given HTML content.
+    """
+    soup = BeautifulSoup(html_text, "html.parser")
+
+    # Find all <a> tags
+    for a in soup.find_all('a'):
+        href = a.get('href', '')
+        if not re.match(r'^https?://', href):  # If the href doesn't start with http(s), it's relative
+            a['href'] = host + href  # Prepend the host to the href
+
+    # Find all <img> tags
+    for img in soup.find_all('img'):
+        src = img.get('src', '')
+        if not re.match(r'^https?://', src):  # If the src doesn't start with http(s), it's relative
+            img['src'] = host + src  # Prepend the host to the src
+
+    return str(soup)
+
+def handle_raw_urls_to_html(text):
+    url_pattern = r'(?<!["\'])\bhttps?://[^\s<>"]+'  # Regex to match raw URLs not inside quotes or tags
+    
+    # Function to replace raw URLs with the link itself
+    def replace_with_attachment(match):
+        url = match.group(0)  # Full URL match
+        return f'<a href="{url}">{url}</a>'  # Use the URL as the link text
+    
+    # Use re.sub to replace only raw URLs
+    html_text = re.sub(url_pattern, replace_with_attachment, text)
+    
+    return html_text
 
 def g_to_y_date(gandiva_date: str) -> str:
     """
@@ -544,9 +627,9 @@ def task_exists_in_list(g_tasks, task_id):
             return True
     return False
 
-def g_addressee_exists(addressees, addressee):
+def g_addressee_exists(addressees, addressee_id):
     for addressee in addressees:
-        if addressee['User']['Id'] == addressee:
+        if addressee['User']['Id'] == addressee_id:
             return True
     return False
 
@@ -575,28 +658,73 @@ def is_id_in_summonees(y_author_id: str, y_summonees: list) -> bool:
 
 def extract_existing_comments_from_gandiva(g_comments):
     """
-    Extracts the existing comments from Gandiva and returns a mapping of g_comment_id to g_text.
+    Extracts the existing comments from Gandiva and returns two mappings:
+    - existing_g_comments: A mapping of y_comment_id to g_comment_id.
+    - comment_texts_in_gandiva: A mapping of y_comment_id to g_text.
+    
+    :param g_comments: List of Gandiva comments.
+    :return: Two dictionaries - existing_g_comments and comment_texts_in_gandiva.
     """
     existing_g_comments = {}
+    comment_texts_in_gandiva = {}
 
     for g_comment in g_comments:
         g_text = g_comment['Text']
         match = re.match(r'\[(\d+)\]', g_text)  # Match [g_comment_id] format
         if match:
-            g_comment_id = match.group(1)
-            existing_g_comments[g_comment_id] = g_text  # Map g_comment_id to g_text
+            y_comment_id = match.group(1)
+            g_comment_id = g_comment.get('Id')  # Assuming 'Id' is the g_comment_id in the g_comment object
+            existing_g_comments[y_comment_id] = g_comment_id  # Map y_comment_id to g_comment_id
+            comment_texts_in_gandiva[y_comment_id] = g_text  # Map y_comment_id to g_text
 
-    return existing_g_comments
+    return existing_g_comments, comment_texts_in_gandiva
 
 def is_g_comment_author_this(g_comment, author_id):
-    return True if g_comment.get('Author') and g_comment.get('Author').get('Id') and str(g_comment.get('Author').get('Id')) == str(author_id) else None
+    return True if g_comment.get('Author') and g_comment.get('Author').get('Id') and str(g_comment.get('Author').get('Id')) == str(author_id) else False
+
+def format_attachments(g_attachments):
+    """
+    Formats a list of attachments into a string with numbered links.
+
+    :param g_attachments: A list of dictionaries containing attachment details.
+    :return: A formatted string listing the attachments with links.
+    """
+    if not g_attachments:
+        return ""
+
+    attachments_text = "Вложения:\n"
+    base_url = "https://gandiva.s-stroy.ru/Resources/Attachment/"
+
+    for i, attachment in enumerate(g_attachments, start=1):
+        # Extract the attachment's name and GUID to create the link
+        attachment_name = attachment.get('Name', 'Unnamed attachment')
+        guid = attachment.get('Guid')
+        
+        # Construct the attachment line with a number, name, and link
+        if guid:
+            attachment_link = f"{base_url}{guid}"
+            attachments_text += f"{i}. [{attachment_name}]({attachment_link})\n"
+        else:
+            attachments_text += f"{i}. {attachment_name} (no link available)\n"
+
+    return attachments_text
+
+def get_next_year_datetime():
+    # Get the current year
+    current_year = datetime.datetime.now().year
+    
+    # Calculate the next year
+    next_year = current_year + 1
+    
+    # Return the next year's January 1st in the desired format
+    next_year_datetime = f"{next_year}-01-01T00:00:00+03:00"
+    
+    return next_year_datetime
 
 import yandex_api as yapi
 import gandiva_api as gapi
 import asyncio    
-async def main():
-    g_task  = await gapi.get_task(196295)
-    g_tasks = [g_task]
+async def main():        
     pass
 
 
