@@ -732,7 +732,11 @@ async def edit_task(y_task_id, summary=None, description=None,y_assignee_id=None
     if nd: body[YA_FIELD_ID_ND] = nd
     if analyst: body[YA_FIELD_ID_ANALYST] = analyst
     if start: body["start"] = start
-    if g_task_id: body[YA_FIELD_ID_GANDIVA_TASK_ID] = g_task_id
+    if g_task_id:
+        body[YA_FIELD_ID_GANDIVA_TASK_ID] = g_task_id
+    elif g_task_id == '':
+        body[YA_FIELD_ID_GANDIVA_TASK_ID] = None
+
     if gandiva: body[YA_FIELD_ID_GANDIVA] = gandiva
 
 
@@ -822,8 +826,8 @@ async def batch_edit_tasks(values: dict, task_ids: list):
 
     # Prepare the request body
     body = {
-        "values": values,
-        "issues": task_ids
+        "issues": task_ids,
+        "values": values
     }
 
     # Construct the URL for the bulk update
@@ -1101,21 +1105,31 @@ async def handle_in_work_but_waiting_for_analyst(g_tasks: list[dict], y_tasks: l
     else:
         return False
 
+async def handle_cancelled_tasks_still_have_g_task_ids(queue):
+    count = 0
+    queue = 'DEV'
+    g_task_id_field_id = '65819b1f16888e256be30f51--GandivaTaskId'
+    y_tasks = await get_tasks(query=f'DEV."Номер заявки в Гандиве": notEmpty() (Resolution: notEmpty() or "Status Type": cancelled, done) Queue: {queue} Status: onecancelled "Sort by": Updated DESC')
+    if not y_tasks:
+        logging.info(f"No anomalies found!")
+        return True
+    for y_task in y_tasks:
+        y_task_id = y_task.get('key')
+        res = await edit_task(y_task_id, g_task_id='')
+        if res:
+            logging.info(f"Removed GandivaTaskId from cancelled task {y_task_id}!")
+            count += 1
+        else:
+            logging.error(f"Failed removing GandivaTaskId from cancelled task {y_task_id}.")
+
+    if count:
+        logging.info(f"Handled {count} cancelled tasks (removed g_task_id from them)!")
+        return True
+    else:
+        return False
+    
+
 async def main():
-    await gandiva_api.get_access_token(gandiva_api.GAND_LOGIN, gandiva_api.GAND_PASSWORD)
-    g_task_id = str(196204)
-    g_task_detailed     = await gandiva_api.get_task(g_task_id)
-    description_html    = g_task_detailed['Description']
-    description         = utils.html_to_yandex_format(description_html)  # Assuming a helper function to extract text from HTML
-    g_task_detailed     = await gandiva_api.get_task(g_task_id)
-    g_attachments       = g_task_detailed.get('Attachments')
-    attachments_text    = utils.format_attachments(g_attachments)
-    new_description     = description + "\n" + attachments_text
-    print(new_description)
-    y_task = await get_tasks_by_gandiva_ids([g_task_id])
-    y_task_id = y_task[0].get('key')
-    await edit_task(y_task_id, description=new_description)
-    # pass
     pass
 
 if __name__ == '__main__':

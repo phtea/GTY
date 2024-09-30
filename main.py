@@ -216,8 +216,6 @@ async def main():
         board_id = 52
         interval_minutes = 5
     await update_db(queue)
-    db.find_duplicate_gandiva_tasks(DB_SESSION)
-    return
     # Start sync_services in the background and run every N minutes
     logging.info(f"Settings used in config:sync_mode: {sync_mode}; queue: {queue}; board_id: {board_id}; to_get_followers: {to_get_followers}; use_summaries: {use_summaries}; interval_minutes: {interval_minutes}")
     await run_sync_services_periodically(queue, sync_mode, board_id, to_get_followers, use_summaries=use_summaries, interval_minutes=interval_minutes)
@@ -228,6 +226,7 @@ async def update_db(queue):
     await update_tasks_in_db(queue = queue)
     await update_users_department_in_db()
     await update_it_users_in_db()
+    db.find_duplicate_gandiva_tasks(DB_SESSION)
 
 async def sync_services(queue: str, sync_mode: str, board_id: int, to_get_followers: bool, use_summaries: bool):
     """
@@ -240,7 +239,7 @@ async def sync_services(queue: str, sync_mode: str, board_id: int, to_get_follow
     logging.info(f"Sync started!")
     await yapi.check_access_token(yapi.YA_ACCESS_TOKEN)
     await gapi.get_access_token(gapi.GAND_LOGIN, gapi.GAND_PASSWORD)
-
+    await yapi.handle_cancelled_tasks_still_have_g_task_ids(queue)
 
     # # temp
     # g_task  = await gapi.get_task(196295)
@@ -285,7 +284,7 @@ async def sync_services(queue: str, sync_mode: str, board_id: int, to_get_follow
     # Handle anomalies
     # await gapi.handle_waiting_for_analyst_or_no_contractor_no_required_start_date(g_tasks_in_progress_or_waiting)
     # await yapi.handle_in_work_but_waiting_for_analyst(g_tasks_in_progress, y_tasks)
-
+    
     # NOTE: Uncomment to enable!
     # await sync_comments(g_tasks_in_progress, sync_mode)
     # await yapi.create_weekly_release_sprint(board_id)
