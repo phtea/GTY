@@ -1,5 +1,5 @@
 import logging
-from sqlalchemy import create_engine, Column, String, ForeignKey, Table
+from sqlalchemy import create_engine, Column, String, ForeignKey, Table, func
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker, Session
 from sqlalchemy.exc import NoResultFound, IntegrityError
 import yandex_api
@@ -341,6 +341,26 @@ def convert_gandiva_observers_to_yandex_followers(session, gandiva_observers: li
     ]
 
     return yandex_followers
+
+def find_duplicate_gandiva_tasks(db_session: Session):
+    """
+    Logs a warning for all duplicate task_id_gandiva entries in the 'tasks' table.
+    
+    :param db_session: The SQLAlchemy session object to interact with the database.
+    """
+    # Query the database for task_id_gandiva and count how many times each appears
+    duplicates = (db_session.query(Task.task_id_gandiva, func.count(Task.task_id_gandiva).label('count'))
+                  .group_by(Task.task_id_gandiva)
+                  .having(func.count(Task.task_id_gandiva) > 1)
+                  .all())
+
+    # If duplicates found, log them
+    for gandiva_id, count in duplicates:
+        # Fetch all yandex_task_ids related to the duplicated task_id_gandiva
+        yandex_ids = db_session.query(Task.task_id_yandex).filter(Task.task_id_gandiva == gandiva_id).all()
+        yandex_ids_list = [y[0] for y in yandex_ids]  # Extract task_id_yandex from query result
+
+        logging.warning(f"Duplicate task_id_gandiva: {gandiva_id}, associated task_id_yandex: {', '.join(yandex_ids_list)}")
 
 if __name__ == '__main__':
     pass

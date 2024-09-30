@@ -136,11 +136,13 @@ async def sync_comments(g_tasks, sync_mode: int, get_comments_execution: str = '
                     logging.debug(f"Skipping comment {g_comment_id} as contents are the same.")
                     continue
                 
-                logging.info(f"Editing comment {g_comment_id} in Yandex task {y_task_id}")
 
                 response = await yapi.edit_comment(y_task_id, g_text, g_comment_id, y_comment_id, author_name)
                 if response:
                     edited_comment_in_y_count += 1
+                    logging.info(f"Edited comment {g_comment_id} in Yandex task {y_task_id}!")
+                else:
+                    logging.error(f"Failed editing comment {g_comment_id} in Yandex task {y_task_id}.")
             else:
                 # Send the comment to Yandex if sync_mode is not 2 or if GANDIVA_PROGRAMMER_ID is found
                 response = await yapi.add_comment(y_task_id, g_text, g_comment_id, author_name)
@@ -214,6 +216,8 @@ async def main():
         board_id = 52
         interval_minutes = 5
     await update_db(queue)
+    db.find_duplicate_gandiva_tasks(DB_SESSION)
+    return
     # Start sync_services in the background and run every N minutes
     logging.info(f"Settings used in config:sync_mode: {sync_mode}; queue: {queue}; board_id: {board_id}; to_get_followers: {to_get_followers}; use_summaries: {use_summaries}; interval_minutes: {interval_minutes}")
     await run_sync_services_periodically(queue, sync_mode, board_id, to_get_followers, use_summaries=use_summaries, interval_minutes=interval_minutes)
@@ -280,7 +284,7 @@ async def sync_services(queue: str, sync_mode: str, board_id: int, to_get_follow
     
     # Handle anomalies
     # await gapi.handle_waiting_for_analyst_or_no_contractor_no_required_start_date(g_tasks_in_progress_or_waiting)
-    # await yapi.handle_in_work_but_waiting_for_analyst(queue, g_tasks_in_progress)
+    # await yapi.handle_in_work_but_waiting_for_analyst(g_tasks_in_progress, y_tasks)
 
     # NOTE: Uncomment to enable!
     # await sync_comments(g_tasks_in_progress, sync_mode)
