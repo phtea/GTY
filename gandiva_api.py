@@ -481,9 +481,6 @@ async def handle_tasks_in_work_but_waiting_for_analyst(needed_date):
 
 import time # using for timing functions
 async def main():
-    await get_access_token(GAND_LOGIN, GAND_PASSWORD)
-    g_tasks = await get_tasks(GroupsOfStatuses.in_progress_or_waiting)
-    await handle_waiting_for_analyst_or_no_contractor_no_required_start_date(g_tasks)
     pass
 
 async def handle_waiting_for_analyst_or_no_contractor_no_required_start_date(g_tasks):

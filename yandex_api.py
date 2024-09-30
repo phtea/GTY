@@ -1060,7 +1060,7 @@ def group_tasks_by_status(g_tasks: list, y_tasks: list, to_filter: bool = True) 
 
     return grouped_tasks
 
-async def handle_in_work_but_waiting_for_analyst(queue: str, g_tasks: list[dict]):
+async def handle_in_work_but_waiting_for_analyst(g_tasks: list[dict], y_tasks: list[dict]):
     needed_status = 'twowaitingfortheanalyst'
     cursed_g_tasks = []
     cursed_y_tasks = []
@@ -1079,7 +1079,6 @@ async def handle_in_work_but_waiting_for_analyst(queue: str, g_tasks: list[dict]
     if not cursed_g_tasks:
         logging.info(f"No anomalies found!")
         return True
-    y_tasks = await get_tasks(query=get_query_in_progress(queue))
     for y_task in y_tasks:
         y_task_id = y_task.get('key')
         g_task_id = y_task.get(YA_FIELD_ID_GANDIVA_TASK_ID)
