@@ -471,11 +471,9 @@ async def delete_comment(g_comment_id):
 async def handle_tasks_in_work_but_waiting_for_analyst(needed_date):
     """needed_date in format: 2025-01-01T00:00:00+03:00"""
     tasks = await get_tasks(statutes=[6, 11, 13])
-    waiting_for_analyst_id = 1018
-    needed_tasks = []
-    for task in tasks:
-        if task.get('Contractor') and task.get('Contractor').get('Id') and task.get('Contractor').get('Id') == waiting_for_analyst_id:
-            needed_tasks.append(task)
+    waiting_for_analyst_id = WAITING_ANALYST_ID
+    needed_tasks = [t for t in tasks 
+                    if (c := t.get('Contractor')) and (c := c.get('Id')) and c == waiting_for_analyst_id]
     for needed_task in needed_tasks:
         last_modified_date = needed_task.get('LastModifiedDate')
         task_id = needed_task.get('Id')
@@ -485,15 +483,14 @@ import time # using for timing functions
 async def main():
     await get_access_token(GAND_LOGIN, GAND_PASSWORD)
     g_tasks = await get_tasks(GroupsOfStatuses.in_progress_or_waiting)
-    await handle_waiting_for_analyst_or_no_contractor_no_requiered_start_date(g_tasks)
+    await handle_waiting_for_analyst_or_no_contractor_no_required_start_date(g_tasks)
     pass
 
-async def handle_waiting_for_analyst_or_no_contractor_no_requiered_start_date(g_tasks):
-    case = 'case: Task with contractor = "Waiting For Analyst" or None, without Requiered Start Date'
+async def handle_waiting_for_analyst_or_no_contractor_no_required_start_date(g_tasks):
     next_year = utils.get_next_year_datetime()
     g_task_anomalies = [g for g in g_tasks if not g['Contractor'] or g['Contractor']['Id'] == WAITING_ANALYST_ID and not g['RequiredStartDate']]
     if not g_task_anomalies:
-        logging.info(f"No anomalies found [{case}]!")
+        logging.info(f"No anomalies found!")
         return True
     count = 0
     for g_task_anomaly in g_task_anomalies:
@@ -529,7 +526,7 @@ async def handle_waiting_for_analyst_or_no_contractor_no_requiered_start_date(g_
             logging.error(f"Failed changing contractor to analyst in task {g_task_id}.")
         if res_contractor or res_date:
             count += 1
-    logging.info(f'Handled {count} anomaly tasks [{case}]')
+    logging.info(f'Handled {count} anomaly tasks!')
     # If all anomalies fixed -> return True, else False
     if len(g_task_anomalies) == count:
         return True

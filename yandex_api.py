@@ -542,6 +542,7 @@ async def add_tasks(g_tasks: list[dict], queue: str, non_closed_ya_task_ids: dic
 
     # Log the total number of added tasks
     logging.info(f"Total tasks added: {added_task_count}")
+    return added_task_count
 
 def edit_field_if_empty(y_task, field_id, new_value):
     """
@@ -1059,35 +1060,47 @@ def group_tasks_by_status(g_tasks: list, y_tasks: list, to_filter: bool = True) 
 
     return grouped_tasks
 
-async def handle_in_work_but_waiting_for_analyst():
-    g_tasks = []
+async def handle_in_work_but_waiting_for_analyst(queue: str, g_tasks: list[dict]):
+    needed_status = 'twowaitingfortheanalyst'
     cursed_g_tasks = []
     cursed_y_tasks = []
     users_to_skip = [1001, 878, 1020, 852, 410]
-    g_tasks = await gandiva_api.get_tasks(gandiva_api.GroupsOfStatuses.in_progress)
-    # g_task = await gandiva_api.get_task(196204)
-    # g_tasks.append(g_task)
     for g_task in g_tasks:
         g_status    = g_task['Status']
         y_status    = utils.g_to_y_status(g_status)
         y_step      = utils.y_status_to_step(y_status)
         if y_step == 3 and g_task.get('Contractor') and g_task.get('Contractor').get('Id'):
             contr = g_task.get('Contractor').get('Id')
-            if contr == 1018 or not db.get_user_by_gandiva_id(session=DB_SESSION, g_user_id=contr) and contr not in users_to_skip:
+            if contr == gandiva_api.WAITING_ANALYST_ID or not db.get_user_by_gandiva_id(session=DB_SESSION, g_user_id=contr) and contr not in users_to_skip:
                 cursed_g_tasks.append(g_task)
     # return
     cursed_g_task_ids = utils.extract_task_ids(cursed_g_tasks)
     cursed_g_task_ids = list(map(str, cursed_g_task_ids))
-    y_tasks = await get_tasks(query=get_query_in_progress('DEV'))
+    if not cursed_g_tasks:
+        logging.info(f"No anomalies found!")
+        return True
+    y_tasks = await get_tasks(query=get_query_in_progress(queue))
     for y_task in y_tasks:
         y_task_id = y_task.get('key')
-        g_task_id = y_task.get('65819b1f16888e256be30f51--GandivaTaskId')
+        g_task_id = y_task.get(YA_FIELD_ID_GANDIVA_TASK_ID)
         if g_task_id not in cursed_g_task_ids: continue
         if not g_task_id:
-            print(f"No {g_task_id} in {y_task_id}...")
+            logging.debug(f"No {g_task_id} in {y_task_id}...")
+            continue
+        if y_task.get('status', {}).get('key') == needed_status:
+            logging.debug(f'Task {y_task_id} already in status {needed_status}')
             continue
         cursed_y_tasks.append(y_task)
-    await move_tasks_status(cursed_y_tasks, 'twowaitingfortheanalyst')
+    if not cursed_y_tasks:
+        logging.info(f"No anomalies found!")
+        return True
+    res = await move_tasks_status(cursed_y_tasks, needed_status)
+    if res:
+        logging.info(f"Handled {len(cursed_y_tasks)} anomaly tasks!")
+    if len(cursed_y_tasks) > 0:
+        return True
+    else:
+        return False
 
 async def main():
     await gandiva_api.get_access_token(gandiva_api.GAND_LOGIN, gandiva_api.GAND_PASSWORD)

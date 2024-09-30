@@ -335,12 +335,10 @@ def convert_gandiva_observers_to_yandex_followers(session, gandiva_observers: li
     :param session: The SQLAlchemy session used for database queries.
     :return: A list of Yandex follower IDs.
     """
-    yandex_followers = []
-
-    for gandiva_id in gandiva_observers:
-        user = get_user_by_gandiva_id(session, gandiva_id)
-        if user and user.yandex_user_id:
-            yandex_followers.append(user.yandex_user_id)
+    yandex_followers = [
+        user.yandex_user_id for gandiva_id in gandiva_observers 
+        if (user := get_user_by_gandiva_id(session, gandiva_id)) and user.yandex_user_id
+    ]
 
     return yandex_followers
 
