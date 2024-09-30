@@ -174,7 +174,7 @@ async def run_sync_services_periodically(queue: str, sync_mode: int, board_id: i
         await asyncio.sleep(interval_minutes * 60)
 
 async def update_tasks_in_db(queue: str):
-    y_tasks = await yapi.get_tasks(query=yapi.get_query_all(queue))
+    y_tasks = await yapi.get_tasks(query=yapi.get_query_in_progress(queue))
     db.add_tasks(session=DB_SESSION, y_tasks=y_tasks)
 
 async def update_users_department_in_db():
@@ -220,7 +220,7 @@ async def main():
     await run_sync_services_periodically(queue, sync_mode, board_id, to_get_followers, use_summaries=use_summaries, interval_minutes=interval_minutes)
 
 async def update_db(queue):
-    # db.update_database_schema(DB_ENGINE)
+    db.update_database_schema(DB_ENGINE)
     await yapi.check_access_token(yapi.YA_ACCESS_TOKEN)
     await gapi.get_access_token(gapi.GAND_LOGIN, gapi.GAND_PASSWORD)
     await update_tasks_in_db(queue = queue)
