@@ -251,11 +251,7 @@ async def sync_services(queue: str, sync_mode: str, board_id: int, to_get_follow
     g_tasks_in_progress_or_waiting  = gapi.extract_tasks_by_status(g_tasks_all, gapi.GroupsOfStatuses.in_progress_or_waiting) # add
     # g_tasks_waiting_or_finished     = gapi.extract_tasks_by_status(g_tasks_all, gapi.GroupsOfStatuses.waiting_or_finished) # move status
 
-    # Don't make separate requests, instead get all tasks and filter what we need by statuses
-    # g_tasks_in_progress             = await gapi.get_tasks(gapi.GroupsOfStatuses.in_progress) # full sync [3, 4, 6, 8, 13]
-    # g_tasks_waiting_or_finished     = await gapi.get_tasks(gapi.GroupsOfStatuses.waiting_or_finished) # move status
-    # g_tasks_in_progress_or_waiting  = await gapi.get_tasks(gapi.GroupsOfStatuses.in_progress_or_waiting) # add
-
+    
     if FEW_DATA:
         found_task_id   = 190069
         found_task      = None
@@ -276,17 +272,16 @@ async def sync_services(queue: str, sync_mode: str, board_id: int, to_get_follow
     not_closed_task_ids_2 = utils.extract_task_ids_from_gandiva_task_id(y_tasks)
     not_closed_task_ids.update(not_closed_task_ids_2)
     
-    await yapi.add_tasks(g_tasks_in_progress_or_waiting, queue=queue, non_closed_ya_task_ids=not_closed_task_ids)
-    y_tasks_new = await yapi.get_tasks(query=yapi.get_query_in_progress(queue))
+    tasks_added = await yapi.add_tasks(g_tasks_in_progress_or_waiting, queue=queue, non_closed_ya_task_ids=not_closed_task_ids)
+    if tasks_added > 0: y_tasks = await yapi.get_tasks(query=yapi.get_query_in_progress(queue))
 
-    await yapi.batch_move_tasks_status(g_tasks_all, y_tasks_new)
-    # await yapi.batch_move_tasks_status(g_tasks_waiting_or_finished, y_tasks)
+    await yapi.batch_move_tasks_status(g_tasks_all, y_tasks)
+    await yapi.edit_tasks(g_tasks_in_progress, y_tasks, to_get_followers, use_summaries)
     
-    await yapi.edit_tasks(g_tasks_in_progress, y_tasks_new, to_get_followers, use_summaries)
-    
-    # Handling different exceptions here
-    await gapi.handle_waiting_for_analyst_or_no_contractor_no_requiered_start_date(g_tasks=g_tasks_in_progress_or_waiting)
-    
+    # Handle anomalies
+    # await gapi.handle_waiting_for_analyst_or_no_contractor_no_required_start_date(g_tasks_in_progress_or_waiting)
+    # await yapi.handle_in_work_but_waiting_for_analyst(queue, g_tasks_in_progress)
+
     # NOTE: Uncomment to enable!
     # await sync_comments(g_tasks_in_progress, sync_mode)
     # await yapi.create_weekly_release_sprint(board_id)
