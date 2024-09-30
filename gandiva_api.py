@@ -237,6 +237,19 @@ async def get_task_comments(g_task_id):
         logging.error(f"Failed to fetch comments for task {g_task_id}")
         return None
 
+def get_task_by_id_from_list(task_list, task_id):
+    """
+    Retrieves a task from a list of tasks based on the given task_id.
+
+    :param task_list: List of task dictionaries.
+    :param task_id: The ID of the task to retrieve.
+    :return: The task dictionary if found, otherwise None.
+    """
+    for task in task_list:
+        if task.get('Id') == task_id:
+            return task
+    return None  # Return None if no task with the given ID is found
+
 # Define the function to get comments for a list of task IDs with concurrency control
 async def get_comments_for_tasks_concurrently(g_task_ids: list[int]):
     """Fetch comments for a list of tasks with a limit on concurrent requests."""

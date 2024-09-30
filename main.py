@@ -67,7 +67,6 @@ async def sync_comments(g_tasks, sync_mode: int, get_comments_execution: str = '
             # if comment's author is NOT YRobot and YRobot is mentioned (in summonees): DONE
             # Add comment to gandiva, continue (we don't need to add it back to Yandex, duh) DONE
             # Unique check: if y_comment_id is in gandiva comments already -> don't add
-            # TODO: addresses: all
 
             # -> Gandiva section
             if y_author_id:
@@ -76,7 +75,8 @@ async def sync_comments(g_tasks, sync_mode: int, get_comments_execution: str = '
                     y_text = utils.remove_mentions(y_text)
                     y_text_html = utils.markdown_to_html(y_text)
                     y_comment_id = str(y_comment_id)
-                    g_addressees = None
+                    g_task = gapi.get_task_by_id_from_list(g_tasks, g_task_id)
+                    g_addressees = [g_task['Initiator']['Id'], g_task['Contractor']['Id']]
                     if y_comment_id in existing_g_comments:
                         g_comment_id = existing_g_comments.get(y_comment_id)
                         g_text = comment_texts_in_gandiva.get(y_comment_id)
@@ -240,13 +240,13 @@ async def sync_services(queue: str, sync_mode: str, board_id: int, to_get_follow
     await yapi.check_access_token(yapi.YA_ACCESS_TOKEN)
     await gapi.get_access_token(gapi.GAND_LOGIN, gapi.GAND_PASSWORD)
 
-    # # temp
-    # g_task  = await gapi.get_task(196295)
-    # g_tasks = [g_task]
-    # await sync_comments(g_tasks, sync_mode)
-    # await asyncio.sleep(30)
-    # return
-    # # temp
+    # temp
+    g_task  = await gapi.get_task(196295)
+    g_tasks = [g_task]
+    await sync_comments(g_tasks, sync_mode)
+    await asyncio.sleep(30)
+    return
+    # temp
     g_tasks_all                     = await gapi.get_tasks(gapi.GroupsOfStatuses._all) # all
 
     g_tasks_in_progress             = gapi.extract_tasks_by_status(g_tasks_all, gapi.GroupsOfStatuses.in_progress) # full sync [3, 4, 6, 8, 13]
