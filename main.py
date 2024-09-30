@@ -68,7 +68,6 @@ async def sync_comments(g_tasks, sync_mode: int, get_comments_execution: str = '
             # Add comment to gandiva, continue (we don't need to add it back to Yandex, duh) DONE
             # Unique check: if y_comment_id is in gandiva comments already -> don't add
             # TODO: addresses: all
-            # TODO: get g_comment_id
 
             # -> Gandiva section
             if y_author_id:
@@ -221,6 +220,7 @@ async def main():
     await run_sync_services_periodically(queue, sync_mode, board_id, to_get_followers, use_summaries=use_summaries, interval_minutes=interval_minutes)
 
 async def update_db(queue):
+    # db.update_database_schema(DB_ENGINE)
     await yapi.check_access_token(yapi.YA_ACCESS_TOKEN)
     await gapi.get_access_token(gapi.GAND_LOGIN, gapi.GAND_PASSWORD)
     await update_tasks_in_db(queue = queue)
@@ -239,7 +239,6 @@ async def sync_services(queue: str, sync_mode: str, board_id: int, to_get_follow
     logging.info(f"Sync started!")
     await yapi.check_access_token(yapi.YA_ACCESS_TOKEN)
     await gapi.get_access_token(gapi.GAND_LOGIN, gapi.GAND_PASSWORD)
-    await yapi.handle_cancelled_tasks_still_have_g_task_ids(queue)
 
     # # temp
     # g_task  = await gapi.get_task(196295)
@@ -282,12 +281,13 @@ async def sync_services(queue: str, sync_mode: str, board_id: int, to_get_follow
     await yapi.edit_tasks(g_tasks_in_progress, y_tasks, to_get_followers, use_summaries)
     
     # Handle anomalies
-    # await gapi.handle_waiting_for_analyst_or_no_contractor_no_required_start_date(g_tasks_in_progress_or_waiting)
-    # await yapi.handle_in_work_but_waiting_for_analyst(g_tasks_in_progress, y_tasks)
+    await yapi.handle_cancelled_tasks_still_have_g_task_ids(queue)
+    await gapi.handle_waiting_for_analyst_or_no_contractor_no_required_start_date(g_tasks_in_progress_or_waiting)
+    await yapi.handle_in_work_but_waiting_for_analyst(g_tasks_in_progress, y_tasks)
     
     # NOTE: Uncomment to enable!
-    # await sync_comments(g_tasks_in_progress, sync_mode)
-    # await yapi.create_weekly_release_sprint(board_id)
+    await sync_comments(g_tasks_in_progress, sync_mode)
+    await yapi.create_weekly_release_sprint(board_id)
 
     logging.info("Sync finished successfully!")
 

@@ -291,9 +291,11 @@ async def get_page_of_tasks(queue: str = None,
     # Use the helper function to make the POST request
     response_json = await make_http_request('POST', url, headers=HEADERS, body=body_json)
 
-    # Return the response JSON or None if the request failed
+    # Return the response JSON or [] if the request failed
     if response_json:
         return response_json
+    elif response_json == []:
+        return []
     else:
         logging.error(f"Page {page_number} of tasks with query: {body} is empty.")
         return None
@@ -1107,8 +1109,6 @@ async def handle_in_work_but_waiting_for_analyst(g_tasks: list[dict], y_tasks: l
 
 async def handle_cancelled_tasks_still_have_g_task_ids(queue):
     count = 0
-    queue = 'DEV'
-    g_task_id_field_id = '65819b1f16888e256be30f51--GandivaTaskId'
     y_tasks = await get_tasks(query=f'DEV."Номер заявки в Гандиве": notEmpty() (Resolution: notEmpty() or "Status Type": cancelled, done) Queue: {queue} Status: onecancelled "Sort by": Updated DESC')
     if not y_tasks:
         logging.info(f"No anomalies found!")
