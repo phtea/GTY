@@ -29,6 +29,7 @@ YA_FIELD_ID_GANDIVA_TASK_ID         = config.get('YandexCustomFieldIds', 'gandiv
 YA_FIELD_ID_ND                      = config.get('YandexCustomFieldIds', 'nd')
 DB_URL                              = config.get('Database', 'url')
 YA_REFRESH_TOKEN                    = ''
+YA_DISK_ACCESS_TOKEN                = config.get('Yandex', 'disk_oauth_token')
 GANDIVA_TASK_URL                    = 'https://gandiva.s-stroy.ru/Request/Edit/'
 DB_ENGINE                           = db.create_database(DB_URL)
 DB_SESSION                          = db.get_session(DB_ENGINE)
@@ -47,6 +48,9 @@ HOST = "https://api.tracker.yandex.net"
 HEADERS = {
         "X-Cloud-Org-Id": YA_X_CLOUD_ORG_ID,
         "Authorization": f"OAuth {YA_ACCESS_TOKEN}"
+}
+HEADERS_DISK = {
+    "Authorization": f"OAuth {YA_DISK_ACCESS_TOKEN}"
 }
 
 def get_query_in_progress(queue):
@@ -524,7 +528,6 @@ async def add_tasks(g_tasks: list[dict], queue: str, non_closed_ya_task_ids: dic
         
         new_description     = await description_with_attachments(g_task_id, description)
 
-        # TODO: add g_attachments to the end of description!
         g_status            = g_task['Status']
         y_status            = utils.g_to_y_status(g_status)
         y_step              = utils.y_status_to_step(y_status)
@@ -1127,9 +1130,22 @@ async def handle_cancelled_tasks_still_have_g_task_ids(queue):
         return True
     else:
         return False
-    
+
+async def download_file_from_yandex_disk(path):
+    # GTY/GTY_table.xlsx
+    url = f'https://cloud-api.yandex.net/v1/disk/resources/download?path={path}'
+    file_dict = await make_http_request(method='GET', url=url, headers=HEADERS_DISK)
+    if not file_dict and not file_dict.get('href'):
+        logging.error(f"Failed getting file url from Yandex Disk.")
+        return
+    file_url = file_dict.get('href')
+    file = await make_http_request(method='GET', url=file_url, headers=HEADERS_DISK)
+    return file
 
 async def main():
+    path = 'GTY/GTY_table.xlsx'
+    excel_bytes = await download_file_from_yandex_disk(path='GTY/GTY_table.xlsx')
+    excel_object= utils.read_excel_from_bytes(excel_bytes)
     pass
 
 if __name__ == '__main__':

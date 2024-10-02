@@ -313,17 +313,35 @@ async def make_http_request(method, url, headers=None, body=None, session=None):
 async def _make_request(session, method, url, headers, body):
     """
     Helper function to make an HTTP request using a given session.
+    Handles both JSON/text responses and binary file downloads.
     """
     async with session.request(method, url, headers=headers, data=body) as response:
         status_code = response.status
-        response_text = await response.text()  # For logging purposes
-        
+        content_type = response.headers.get('Content-Type', '')
+
+        # Handle successful responses
         if status_code in [200, 201]:
-            return await response.json()  # Return the JSON response
-        if status_code in [204]:
+            # Check if response is JSON or text
+            if 'application/json' in content_type or 'text' in content_type:
+                response_text = await response.text()  # For logging and return JSON data
+                try:
+                    return await response.json()  # Return the JSON response
+                except Exception as e:
+                    logging.error(f"Failed to parse JSON: {e}")
+                    return response_text  # Return text if not valid JSON
+            else:
+                # Handle binary content (e.g., file download)
+                response_data = await response.read()
+                return response_data  # Return the binary data (e.g., file contents)
+
+        # Handle 204 No Content
+        if status_code == 204:
             return True
+
+        # Handle other response statuses
         else:
-            logging.error(f"Request to {url} failed with status {status_code}: {response_text}")
+            # Log error with as much info as possible
+            logging.error(f"Request to {url} failed with status {status_code}: {response.reason}")
             return None
 
 # Manual mapping of month names in Russian
@@ -420,6 +438,34 @@ def extract_it_users(csv_file_path: str) -> dict:
             gandiva_mail = row['gandiva_mail']
             it_users_dict[yandex_mail] = gandiva_mail
 
+    return it_users_dict
+
+def extract_it_users_from_excel(excel_sheets: dict) -> dict:
+    """
+    Extracts data from the 'it_users' Excel sheet and returns a dictionary where
+    yandex_mail is the key and gandiva_mail is the value.
+
+    :param excel_sheets: Dictionary of sheets read from the Excel file (with sheet names as keys).
+    :return: A dictionary with yandex_mail as keys and gandiva_mail as values.
+    """
+    it_users_dict = {}
+
+    # Access the 'it_users' sheet
+    if 'it_users' in excel_sheets:
+        df = excel_sheets['it_users']
+
+        # Ensure the columns are present
+        if {'yandex_mail', 'gandiva_mail'}.issubset(df.columns):
+            # Iterate through the rows and map yandex_mail to gandiva_mail
+            for _, row in df.iterrows():
+                yandex_mail = row['yandex_mail']
+                gandiva_mail = row['gandiva_mail']
+                it_users_dict[yandex_mail] = gandiva_mail
+        else:
+            raise ValueError("Required columns ('yandex_mail', 'gandiva_mail') are missing in the sheet.")
+    else:
+        raise ValueError("Sheet 'it_users' not found in the Excel file.")
+    
     return it_users_dict
 
 async def map_emails_to_ids(it_users_dict: dict, ya_users: list) -> dict:
@@ -721,9 +767,69 @@ def get_next_year_datetime():
     
     return next_year_datetime
 
+import pandas as pd
+import io
+def read_excel_from_bytes(excel_bytes):
+    """
+    Reads an Excel file from bytes and returns a pandas DataFrame.
+    
+    :param excel_bytes: The byte content of an Excel file.
+    :return: A dictionary of DataFrames, where the keys are sheet names and values are DataFrames.
+    """
+    try:
+        # Create a BytesIO object from the byte data
+        excel_io = io.BytesIO(excel_bytes)
+        
+        # Read the Excel file using pandas
+        # pd.read_excel can handle both single-sheet and multi-sheet Excel files.
+        xls = pd.read_excel(excel_io, sheet_name=None)  # Read all sheets into a dictionary of DataFrames
+        
+        return xls  # Returns a dictionary where keys are sheet names, and values are DataFrames
+    except Exception as e:
+        print(f"Error reading Excel from bytes: {e}")
+        return None
+
+def extract_department_analysts_from_excel(excel_sheets: dict) -> dict:
+    """
+    Extracts departments, their corresponding activity direction (НД), and analyst emails from the given Excel sheet.
+
+    Parameters:
+    - excel_sheets (dict): Dictionary of sheets read from the Excel file (with sheet names as keys).
+
+    Returns:
+    - dict: A dictionary where the keys are department names and the values are dictionaries containing 'НД' and 'yandex_analyst_mail'.
+    """
+    department_analyst_dict = {}
+
+    # Access the 'department_analyst_nd' sheet
+    if 'department_analyst_nd' in excel_sheets:
+        df = excel_sheets['department_analyst_nd']
+
+        # Ensure the columns are present
+        if {'department', 'НД', 'yandex_analyst_mail'}.issubset(df.columns):
+            # Iterate through the rows to populate the dictionary
+            for _, row in df.iterrows():
+                department = row['department']
+                nd = row['НД']  # Extract the НД column
+                analyst_email = row['yandex_analyst_mail']
+
+                # Store the НД and analyst email corresponding to the department
+                department_analyst_dict[department] = {
+                    'НД': nd,
+                    'yandex_analyst_mail': analyst_email
+                }
+        else:
+            raise ValueError("Required columns ('department', 'НД', 'yandex_analyst_mail') are missing in the sheet.")
+    else:
+        raise ValueError("Sheet 'department_analyst_nd' not found in the Excel file.")
+    
+    return department_analyst_dict
+
+
+
 import yandex_api as yapi
 import gandiva_api as gapi
-import asyncio    
+import asyncio
 async def main():        
     pass
 
