@@ -607,6 +607,7 @@ async def update_task_if_needed(y_task, g_task_id, initiator_name, initiator_dep
 
     # Check for analyst by department
     if initiator_department:
+        initiator_department = initiator_department.strip()
         analyst = db.get_user_id_by_department(session=DB_SESSION, department_name=initiator_department)
         edit_fields['edit_analyst'] = edit_field_if_empty(y_task, YA_FIELD_ID_ANALYST, analyst)
 

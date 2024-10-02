@@ -411,6 +411,7 @@ def map_department_nd_to_user_id(department_analyst_dict: dict, users: list) -> 
         email = details['yandex_analyst_mail']
         nd = details['НД']  # Extract the НД value
         uid = email_to_uid.get(email)  # Find the user 'uid' by email
+        department = department.strip()
 
         if uid:
             department_user_mapping[(department, nd)] = uid

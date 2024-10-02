@@ -14,6 +14,7 @@ class Task(Base):
     task_id_yandex = Column(String, primary_key=True)
     task_id_gandiva = Column(String, nullable=False)
 
+
 # 2. Users Table
 class User(Base):
     __tablename__ = 'users'
@@ -21,26 +22,20 @@ class User(Base):
     yandex_user_id = Column(String, primary_key=True)
     gandiva_user_id = Column(String, nullable=True)
 
-    departments = relationship("UserDepartment", back_populates="user")
+    # Relationship with departments (one-to-many)
+    departments = relationship("Department", back_populates="analyst")
+
 
 # 3. Departments Table
 class Department(Base):
     __tablename__ = 'departments'
 
     department_name = Column(String, primary_key=True)
-    nd = Column(String)  # Add the 'НД' field here
+    nd = Column(String)  # Field for 'НД'
+    yandex_user_id = Column(String, ForeignKey('users.yandex_user_id'), nullable=False)  # Analyst for the department
 
-    user_departments = relationship("UserDepartment", back_populates="department")
-
-# 4. UserDepartments Table (Junction Table)
-class UserDepartment(Base):
-    __tablename__ = 'user_departments'
-
-    yandex_user_id = Column(String, ForeignKey('users.yandex_user_id'), primary_key=True)
-    department_name = Column(String, ForeignKey('departments.department_name'), primary_key=True)
-
-    user = relationship("User", back_populates="departments")
-    department = relationship("Department", back_populates="user_departments")
+    # Relationship with user (analyst)
+    analyst = relationship("User", back_populates="departments")
 
 
 # Creating the Database and Tables
@@ -142,8 +137,11 @@ def add_user_department_nd_mapping(session: Session, department_user_mapping: di
     :param department_user_mapping: A dictionary where keys are tuples (department_name, nd), and values are user IDs.
     """
     total_entries = 0
+    skipped_entries = 0
 
     for (department_name, nd), y_user_id in department_user_mapping.items():
+        y_user_id = str(y_user_id)
+        department_name = department_name.strip()
         # Check if the user exists in the database
         user = session.query(User).filter_by(yandex_user_id=y_user_id).one_or_none()
 
@@ -158,32 +156,26 @@ def add_user_department_nd_mapping(session: Session, department_user_mapping: di
 
         if not department:
             # If the department doesn't exist, create and add a new department with the НД field
-            department = Department(department_name=department_name, nd=nd)
+            department = Department(department_name=department_name, nd=nd, yandex_user_id=y_user_id)
             session.add(department)
-            logging.info(f"Department {department_name} with НД {nd} added to the database.")
+            logging.info(f"Department {department_name} with НД {nd} added to the database and assigned to user {y_user_id}.")
+            total_entries += 1
         else:
-            # If the department exists, update the НД field if needed
-            if department.nd != nd:
+            # Check if both the department's ND and yandex_user_id match the incoming data
+            if department.nd == nd and department.yandex_user_id == y_user_id:
+                # If the department is already up to date, skip the update
+                logging.debug(f"Department {department_name} is already up-to-date with user {y_user_id} and НД {nd}. Skipping update.")
+                skipped_entries += 1
+            else:
+                # Update department's ND field and user if needed
                 department.nd = nd
-                logging.info(f"Department {department_name} updated with НД {nd}.")
+                department.yandex_user_id = y_user_id
+                logging.info(f"Department {department_name} updated with НД {nd} and assigned to user {y_user_id}.")
+                total_entries += 1
 
-        # Check if the relationship between the user and department already exists
-        user_department = session.query(UserDepartment).filter_by(
-            yandex_user_id=y_user_id,
-            department_name=department_name
-        ).one_or_none()
+    session.commit()  # Commit all changes at once
+    logging.info(f"{total_entries} user-department mappings added/updated in the database. {skipped_entries} entries skipped.")
 
-        if not user_department:
-            # If the relationship doesn't exist, create it
-            user_department = UserDepartment(yandex_user_id=y_user_id, department_name=department_name)
-            session.add(user_department)
-            logging.info(f"User {y_user_id} assigned to department {department_name}.")
-
-        total_entries += 1
-
-    # Commit the changes to the database
-    session.commit()
-    logging.info(f"{total_entries} user-department mappings added to the database.")
 
 def get_user_id_by_department(session: Session, department_name: str) -> str:
     """
@@ -194,11 +186,11 @@ def get_user_id_by_department(session: Session, department_name: str) -> str:
     :return: The user ID associated with the department, or None if no user is found.
     """
     try:
-        # Query the UserDepartment table to find the user associated with the department
-        user_department = session.query(UserDepartment).filter_by(department_name=department_name).one_or_none()
+        # Query the Department table to find the user associated with the department
+        department = session.query(Department).filter_by(department_name=department_name).one_or_none()
 
-        if user_department:
-            return user_department.yandex_user_id
+        if department:
+            return department.yandex_user_id
         else:
             logging.warning(f"No user found for department: {department_name}")
             return None
@@ -315,7 +307,7 @@ def get_nd_by_department_name(session: Session, department_name: str):
     :return: ND (str) if found, otherwise None.
     """
     try:
-        department = session.query(Department).filter_by(department_name=str(department_name)).one_or_none()
+        department = session.query(Department).filter_by(department_name=str(department_name).strip()).one_or_none()
         return department.nd
     except NoResultFound:
         logging.debug(f"No department found with department_name {department_name}.")
