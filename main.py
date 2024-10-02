@@ -80,7 +80,6 @@ async def sync_comments(g_tasks, sync_mode: int, get_comments_execution: str = '
                     if y_comment_id in existing_g_comments:
                         g_comment_id = existing_g_comments.get(y_comment_id)
                         g_text = comment_texts_in_gandiva.get(y_comment_id)
-                        # TODO: возможно тут не \n, а <br>. или перед сравнением мы должны перевести обратно в markdown
                         if '<br>' in g_text:
                             g_text = g_text.split('<br>', 1)[1]
                         else:
@@ -177,20 +176,23 @@ async def update_tasks_in_db(queue: str):
     y_tasks = await yapi.get_tasks(query=yapi.get_query_in_progress(queue))
     db.add_tasks(session=DB_SESSION, y_tasks=y_tasks)
 
-async def update_users_department_in_db():
-    department_analyst_dict = utils.extract_department_analysts('department_analyst_nd.csv')
-    users = await yapi.get_all_users()
+async def update_users_department_in_db(excel_obj):
+    # department_analyst_dict = utils.extract_department_analysts('department_analyst_nd.csv')
+    
+    department_analyst_dict = utils.extract_department_analysts_from_excel(excel_obj)
+    users                   = await yapi.get_all_users()
     department_user_nd_mapping = utils.map_department_nd_to_user_id(department_analyst_dict, users)
     db.add_user_department_nd_mapping(session=DB_SESSION, department_user_mapping=department_user_nd_mapping)
 
-async def update_it_users_in_db():
+async def update_it_users_in_db(excel_obj):
     
-    it_users    = utils.extract_it_users('it_users.csv')
-    y_users     = await yapi.get_all_users()
-    it_uids     = await utils.map_emails_to_ids(it_users, y_users)
-    g_tasks     = await gapi.get_tasks()
-    g_users     = utils.extract_unique_gandiva_users(g_tasks)
-    uids_y_g    = utils.map_it_uids_to_g_ids(it_uids, g_users)
+    # it_users_dict    = utils.extract_it_users('it_users.csv')
+    it_users_dict   = utils.extract_it_users_from_excel(excel_obj)
+    y_users         = await yapi.get_all_users()
+    it_uids         = await utils.map_emails_to_ids(it_users_dict, y_users)
+    g_tasks         = await gapi.get_tasks()
+    g_users         = utils.extract_unique_gandiva_users(g_tasks)
+    uids_y_g        = utils.map_it_uids_to_g_ids(it_uids, g_users)
     db.add_or_update_user(session=DB_SESSION, user_data=uids_y_g)
 
 
@@ -220,12 +222,15 @@ async def main():
     await run_sync_services_periodically(queue, sync_mode, board_id, to_get_followers, use_summaries=use_summaries, interval_minutes=interval_minutes)
 
 async def update_db(queue):
-    db.update_database_schema(DB_ENGINE)
+    # db.update_database_schema(DB_ENGINE)
+    logging.info('Checking updates for database...')
     await yapi.check_access_token(yapi.YA_ACCESS_TOKEN)
     await gapi.get_access_token(gapi.GAND_LOGIN, gapi.GAND_PASSWORD)
+    excel_bytes = await yapi.download_file_from_yandex_disk(path='GTY/GTY_table.xlsx')
+    excel_obj   = utils.read_excel_from_bytes(excel_bytes)
     await update_tasks_in_db(queue = queue)
-    await update_users_department_in_db()
-    await update_it_users_in_db()
+    await update_users_department_in_db(excel_obj)
+    await update_it_users_in_db(excel_obj)
     db.find_duplicate_gandiva_tasks(DB_SESSION)
 
 async def sync_services(queue: str, sync_mode: str, board_id: int, to_get_followers: bool, use_summaries: bool):
@@ -240,13 +245,13 @@ async def sync_services(queue: str, sync_mode: str, board_id: int, to_get_follow
     await yapi.check_access_token(yapi.YA_ACCESS_TOKEN)
     await gapi.get_access_token(gapi.GAND_LOGIN, gapi.GAND_PASSWORD)
 
-    # temp
-    g_task  = await gapi.get_task(196295)
-    g_tasks = [g_task]
-    await sync_comments(g_tasks, sync_mode)
-    await asyncio.sleep(30)
-    return
-    # temp
+    # # temp
+    # g_task  = await gapi.get_task(196295)
+    # g_tasks = [g_task]
+    # await sync_comments(g_tasks, sync_mode)
+    # await asyncio.sleep(30)
+    # return
+    # # temp
     g_tasks_all                     = await gapi.get_tasks(gapi.GroupsOfStatuses._all) # all
 
     g_tasks_in_progress             = gapi.extract_tasks_by_status(g_tasks_all, gapi.GroupsOfStatuses.in_progress) # full sync [3, 4, 6, 8, 13]
@@ -290,6 +295,8 @@ async def sync_services(queue: str, sync_mode: str, board_id: int, to_get_follow
     await yapi.create_weekly_release_sprint(board_id)
 
     logging.info("Sync finished successfully!")
+    logging.info("Updating DB before next sync...")
+    await update_db(queue)
 
 if __name__ == "__main__":
     asyncio.run(main())
