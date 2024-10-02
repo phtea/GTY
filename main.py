@@ -13,6 +13,7 @@ config.read(CONFIG_PATH)
 
 # Globals
 DB_URL              = config.get('Database', 'url')
+PATH_TO_EXCEL       = config.get('Yandex', 'path_to_excel')
 # Create the database and tables
 DB_ENGINE           = db.create_database(DB_URL)
 DB_SESSION          = db.get_session(DB_ENGINE)
@@ -190,7 +191,7 @@ async def update_it_users_in_db(excel_obj):
     it_users_dict   = utils.extract_it_users_from_excel(excel_obj)
     y_users         = await yapi.get_all_users()
     it_uids         = await utils.map_emails_to_ids(it_users_dict, y_users)
-    g_tasks         = await gapi.get_tasks()
+    g_tasks         = await gapi.get_tasks(gapi.GroupsOfStatuses.in_progress)
     g_users         = utils.extract_unique_gandiva_users(g_tasks)
     uids_y_g        = utils.map_it_uids_to_g_ids(it_uids, g_users)
     db.add_or_update_user(session=DB_SESSION, user_data=uids_y_g)
@@ -223,15 +224,20 @@ async def main():
 
 async def update_db(queue):
     # db.update_database_schema(DB_ENGINE)
-    logging.info('Checking updates for database...')
+    logging.info('Checking updates in database (full check)...')
     await yapi.check_access_token(yapi.YA_ACCESS_TOKEN)
     await gapi.get_access_token(gapi.GAND_LOGIN, gapi.GAND_PASSWORD)
-    excel_bytes = await yapi.download_file_from_yandex_disk(path='GTY/GTY_table.xlsx')
-    excel_obj   = utils.read_excel_from_bytes(excel_bytes)
     await update_tasks_in_db(queue = queue)
+
+    await update_db_excel_data()
+    db.find_duplicate_gandiva_tasks(DB_SESSION)
+
+async def update_db_excel_data():
+    logging.info('Checking updates in database (Excel data)...')
+    excel_bytes = await yapi.download_file_from_yandex_disk(path=PATH_TO_EXCEL)
+    excel_obj   = utils.read_excel_from_bytes(excel_bytes)
     await update_users_department_in_db(excel_obj)
     await update_it_users_in_db(excel_obj)
-    db.find_duplicate_gandiva_tasks(DB_SESSION)
 
 async def sync_services(queue: str, sync_mode: str, board_id: int, to_get_followers: bool, use_summaries: bool):
     """
@@ -245,58 +251,38 @@ async def sync_services(queue: str, sync_mode: str, board_id: int, to_get_follow
     await yapi.check_access_token(yapi.YA_ACCESS_TOKEN)
     await gapi.get_access_token(gapi.GAND_LOGIN, gapi.GAND_PASSWORD)
 
-    # # temp
-    # g_task  = await gapi.get_task(196295)
-    # g_tasks = [g_task]
-    # await sync_comments(g_tasks, sync_mode)
-    # await asyncio.sleep(30)
-    # return
-    # # temp
+    # Fetch tasks from both services
     g_tasks_all                     = await gapi.get_tasks(gapi.GroupsOfStatuses._all) # all
-
     g_tasks_in_progress             = gapi.extract_tasks_by_status(g_tasks_all, gapi.GroupsOfStatuses.in_progress) # full sync [3, 4, 6, 8, 13]
     g_tasks_in_progress_or_waiting  = gapi.extract_tasks_by_status(g_tasks_all, gapi.GroupsOfStatuses.in_progress_or_waiting) # add
     # g_tasks_waiting_or_finished     = gapi.extract_tasks_by_status(g_tasks_all, gapi.GroupsOfStatuses.waiting_or_finished) # move status
-
-    
-    if FEW_DATA:
-        found_task_id   = 190069
-        found_task      = None
-        for g_task in g_tasks_in_progress:
-            if g_task['Id'] == found_task_id:
-                found_task = g_task
-                break
-        g_tasks_in_progress = g_tasks_in_progress[:12]
-        g_tasks_in_progress.append(found_task)
-
-    # ++
     y_tasks = await yapi.get_tasks(query=yapi.get_query_in_progress(queue))
-    # --
 
-    # get gandiva_task_ids from summary and gandiva_task_id fields and combine all
+    # Get gandiva_task_ids from Summary (if enabled in config), gandiva_task_id and combine all
     not_closed_task_ids = {}
     if use_summaries: not_closed_task_ids = utils.extract_task_ids_from_summaries(y_tasks)
     not_closed_task_ids_2 = utils.extract_task_ids_from_gandiva_task_id(y_tasks)
     not_closed_task_ids.update(not_closed_task_ids_2)
     
+    # Add tasks if not in Tracker
     tasks_added = await yapi.add_tasks(g_tasks_in_progress_or_waiting, queue=queue, non_closed_ya_task_ids=not_closed_task_ids)
     if tasks_added > 0: y_tasks = await yapi.get_tasks(query=yapi.get_query_in_progress(queue))
 
+    # Tasks work
     await yapi.batch_move_tasks_status(g_tasks_all, y_tasks)
-    await yapi.edit_tasks(g_tasks_in_progress, y_tasks, to_get_followers, use_summaries)
-    
+    await yapi.edit_tasks(g_tasks_in_progress, y_tasks, to_get_followers, use_summaries)   
+    await sync_comments(g_tasks_in_progress, sync_mode)
+    # Release sprint
+    await yapi.create_weekly_release_sprint(board_id)
+
     # Handle anomalies
     await yapi.handle_cancelled_tasks_still_have_g_task_ids(queue)
     await gapi.handle_waiting_for_analyst_or_no_contractor_no_required_start_date(g_tasks_in_progress_or_waiting)
     await yapi.handle_in_work_but_waiting_for_analyst(g_tasks_in_progress, y_tasks)
-    
-    # NOTE: Uncomment to enable!
-    await sync_comments(g_tasks_in_progress, sync_mode)
-    await yapi.create_weekly_release_sprint(board_id)
 
+    # Update database from Excel file in Yandex Disk
+    await update_db_excel_data()
     logging.info("Sync finished successfully!")
-    logging.info("Updating DB before next sync...")
-    await update_db(queue)
 
 if __name__ == "__main__":
     asyncio.run(main())
