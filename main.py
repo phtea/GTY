@@ -168,7 +168,7 @@ async def run_sync_services_periodically(queue: str, sync_mode: int, board_id: i
             logging.error(f"Error during sync_services: {e}")
         
         # Wait for the specified interval before running sync_services again
-        logging.info(f"Next sync in {interval_minutes} minutes")
+        logging.info(f"Next sync in {interval_minutes} minute(s)")
         logging.info("-" * 40)
 
         await asyncio.sleep(interval_minutes * 60)
