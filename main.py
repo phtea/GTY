@@ -183,7 +183,7 @@ async def update_users_department_in_db(excel_obj):
     department_analyst_dict = utils.extract_department_analysts_from_excel(excel_obj)
     users                   = await yapi.get_all_users()
     department_user_nd_mapping = utils.map_department_nd_to_user_id(department_analyst_dict, users)
-    db.add_user_department_nd_mapping(session=DB_SESSION, department_user_mapping=department_user_nd_mapping)
+    return db.add_user_department_nd_mapping(session=DB_SESSION, department_user_mapping=department_user_nd_mapping)
 
 async def update_it_users_in_db(excel_obj):
     
@@ -194,7 +194,7 @@ async def update_it_users_in_db(excel_obj):
     g_tasks         = await gapi.get_tasks(gapi.GroupsOfStatuses.in_progress)
     g_users         = utils.extract_unique_gandiva_users(g_tasks)
     uids_y_g        = utils.map_it_uids_to_g_ids(it_uids, g_users)
-    db.add_or_update_user(session=DB_SESSION, user_data=uids_y_g)
+    return db.add_or_update_user(session=DB_SESSION, user_data=uids_y_g)
 
 
 # Main function to start the bot
@@ -224,6 +224,7 @@ async def main():
 
 async def update_db(queue):
     # db.update_database_schema(DB_ENGINE)
+    db.clean_department_names(DB_SESSION)
     logging.info('Checking updates in database (full check)...')
     await yapi.check_access_token(yapi.YA_ACCESS_TOKEN)
     await gapi.get_access_token(gapi.GAND_LOGIN, gapi.GAND_PASSWORD)
@@ -236,8 +237,12 @@ async def update_db_excel_data():
     logging.info('Checking updates in database (Excel data)...')
     excel_bytes = await yapi.download_file_from_yandex_disk(path=PATH_TO_EXCEL)
     excel_obj   = utils.read_excel_from_bytes(excel_bytes)
-    await update_users_department_in_db(excel_obj)
-    await update_it_users_in_db(excel_obj)
+    res_1 = await update_users_department_in_db(excel_obj)
+    res_2 = await update_it_users_in_db(excel_obj)
+    if res_1 or res_2:
+        utils.EXCEL_UPDATED_IN_YANDEX_DISK = True
+    else:
+        utils.EXCEL_UPDATED_IN_YANDEX_DISK = False
 
 async def sync_services(queue: str, sync_mode: str, board_id: int, to_get_followers: bool, use_summaries: bool):
     """
@@ -255,6 +260,7 @@ async def sync_services(queue: str, sync_mode: str, board_id: int, to_get_follow
     g_tasks_all                     = await gapi.get_tasks(gapi.GroupsOfStatuses._all) # all
     g_tasks_in_progress             = gapi.extract_tasks_by_status(g_tasks_all, gapi.GroupsOfStatuses.in_progress) # full sync [3, 4, 6, 8, 13]
     g_tasks_in_progress_or_waiting  = gapi.extract_tasks_by_status(g_tasks_all, gapi.GroupsOfStatuses.in_progress_or_waiting) # add
+    g_tasks_waiting                 = gapi.extract_tasks_by_status(g_tasks_all, gapi.GroupsOfStatuses.waiting) # part edit
     # g_tasks_waiting_or_finished     = gapi.extract_tasks_by_status(g_tasks_all, gapi.GroupsOfStatuses.waiting_or_finished) # move status
     y_tasks = await yapi.get_tasks(query=yapi.get_query_in_progress(queue))
 
@@ -270,7 +276,9 @@ async def sync_services(queue: str, sync_mode: str, board_id: int, to_get_follow
 
     # Tasks work
     await yapi.batch_move_tasks_status(g_tasks_all, y_tasks)
-    await yapi.edit_tasks(g_tasks_in_progress, y_tasks, to_get_followers, use_summaries)   
+    await yapi.edit_tasks(g_tasks_in_progress, y_tasks, to_get_followers, use_summaries)
+    await yapi.edit_tasks(g_tasks_waiting, y_tasks, to_get_followers, use_summaries, edit_descriptions=False)   
+    
     await sync_comments(g_tasks_in_progress, sync_mode)
     # Release sprint
     await yapi.create_weekly_release_sprint(board_id)

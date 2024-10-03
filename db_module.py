@@ -1,8 +1,9 @@
 import logging
-from sqlalchemy import create_engine, Column, String, ForeignKey, Table, func
+from sqlalchemy import create_engine, Column, String, ForeignKey, Table, func, text
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker, Session
 from sqlalchemy.exc import NoResultFound, IntegrityError
 import yandex_api
+import re
 import utils
 
 Base = declarative_base()
@@ -141,7 +142,9 @@ def add_user_department_nd_mapping(session: Session, department_user_mapping: di
 
     for (department_name, nd), y_user_id in department_user_mapping.items():
         y_user_id = str(y_user_id)
-        department_name = department_name.strip()
+        # Normalize department_name
+        department_name = utils.normalize_department_name(department_name)
+        
         # Check if the user exists in the database
         user = session.query(User).filter_by(yandex_user_id=y_user_id).one_or_none()
 
@@ -176,6 +179,8 @@ def add_user_department_nd_mapping(session: Session, department_user_mapping: di
     session.commit()  # Commit all changes at once
     logging.info(f"{total_entries} user-department mappings added/updated in the database. {skipped_entries} entries skipped.")
 
+    return bool(total_entries)
+
 
 def get_user_id_by_department(session: Session, department_name: str) -> str:
     """
@@ -186,6 +191,9 @@ def get_user_id_by_department(session: Session, department_name: str) -> str:
     :return: The user ID associated with the department, or None if no user is found.
     """
     try:
+        # Normalize department_name
+        department_name = utils.normalize_department_name(department_name)
+
         # Query the Department table to find the user associated with the department
         department = session.query(Department).filter_by(department_name=department_name).one_or_none()
 
@@ -206,6 +214,7 @@ def add_or_update_user(session: Session, user_data: dict):
     :param user_data: Dictionary where keys are yandex_user_id and values are gandiva_user_id.
                       Example: {2332300: 60, ...}
     """
+    updates_count = 0
     for y_user_id, g_user_id in user_data.items():
         try:
             # Check if the user exists by yandex_user_id
@@ -217,6 +226,7 @@ def add_or_update_user(session: Session, user_data: dict):
                     user.gandiva_user_id = str(g_user_id)
                     session.commit()
                     logging.info(f"Updated user {y_user_id} with Gandiva ID {g_user_id}.")
+                    updates_count += 1
                 else:
                     logging.debug(f"User {y_user_id} already exists with Gandiva ID {user.gandiva_user_id}. No update required.")
             else:
@@ -225,10 +235,13 @@ def add_or_update_user(session: Session, user_data: dict):
                 session.add(new_user)
                 session.commit()
                 logging.info(f"Added new user {y_user_id} with Gandiva ID {g_user_id}.")
+                updates_count += 1
 
         except Exception as e:
             session.rollback()
             logging.error(f"Error adding or updating user {y_user_id}: {str(e)}")
+
+    return bool(updates_count)
 
 def add_or_update_task(session: Session, g_task_id: str, y_task_id: str):
     """
@@ -298,6 +311,7 @@ def get_user_by_gandiva_id(session: Session, g_user_id: str):
         logging.error(f"Error retrieving user by Gandiva ID {g_user_id}: {str(e)}")
         return None
 
+
 def get_nd_by_department_name(session: Session, department_name: str):
     """
     Retrieves ND from the database by their department_name.
@@ -307,7 +321,10 @@ def get_nd_by_department_name(session: Session, department_name: str):
     :return: ND (str) if found, otherwise None.
     """
     try:
-        department = session.query(Department).filter_by(department_name=str(department_name).strip()).one_or_none()
+        # Normalize department_name
+        department_name = utils.normalize_department_name(department_name)
+
+        department = session.query(Department).filter_by(department_name=department_name).one_or_none()
         return department.nd
     except NoResultFound:
         logging.debug(f"No department found with department_name {department_name}.")
@@ -350,6 +367,30 @@ def find_duplicate_gandiva_tasks(db_session: Session):
         yandex_ids_list = [y[0] for y in yandex_ids]  # Extract task_id_yandex from query result
 
         logging.warning(f"Duplicate task_id_gandiva: {gandiva_id}, associated task_id_yandex: {', '.join(yandex_ids_list)}")
+
+# Function to clean department names
+def clean_department_names(db_session: Session):
+    try:
+        # The raw SQL query to clean department names
+        update_query = text("""
+        UPDATE departments
+        SET department_name = TRIM(REPLACE(REPLACE(department_name, ' ', ' '), '  ', ' '))
+        WHERE department_name LIKE '% %' OR department_name LIKE '%  %';
+        """)
+
+        # Execute the raw SQL and get the result
+        result = db_session.execute(update_query)
+
+        # Commit the transaction to apply the changes
+        db_session.commit()
+
+        # Log the number of affected rows
+        logging.info(f"Department names cleaned successfully. Rows affected: {result.rowcount}")
+
+    except Exception as e:
+        # Rollback in case of any errors
+        db_session.rollback()
+        logging.error(f"Error occurred: {e}")
 
 if __name__ == '__main__':
     pass
