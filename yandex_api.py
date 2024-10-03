@@ -587,10 +587,10 @@ async def update_task_if_needed(y_task, g_task_id, initiator_name, initiator_dep
     edit_followers = None
     if len(y_task.get('followers', ())) < len(followers):
         edit_followers = followers
-
+    current_y_assignee = y_task.get('assignee', {}).get('id')
     # Custom assignee handler
     edit_assignee = None
-    if y_step not in [0, 1, 2] and y_task.get('assignee', {}).get('id') != y_assignee:
+    if y_step not in [0, 1, 2] and current_y_assignee != y_assignee:
         edit_assignee = y_assignee
 
     gandiva = GANDIVA_TASK_URL + g_task_id
@@ -620,6 +620,9 @@ async def update_task_if_needed(y_task, g_task_id, initiator_name, initiator_dep
                 # Check if empty or waiting for analyst
                 if not cur_y_analyst and g_contractor_id in [None, gandiva_api.WAITING_ANALYST_ID]:
                     edit_fields['edit_analyst'] = analyst
+            if y_step in [0, 1, 2] and current_y_assignee != analyst:
+                edit_fields['edit_assignee_yandex_id'] = analyst
+
 
     # If any field needs to be edited, call the edit function
     if any(edit_fields.values()):

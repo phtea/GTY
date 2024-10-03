@@ -269,7 +269,7 @@ async def sync_services(queue: str, sync_mode: str, board_id: int, to_get_follow
     if use_summaries: not_closed_task_ids = utils.extract_task_ids_from_summaries(y_tasks)
     not_closed_task_ids_2 = utils.extract_task_ids_from_gandiva_task_id(y_tasks)
     not_closed_task_ids.update(not_closed_task_ids_2)
-    
+
     # Add tasks if not in Tracker
     tasks_added = await yapi.add_tasks(g_tasks_in_progress_or_waiting, queue=queue, non_closed_ya_task_ids=not_closed_task_ids)
     if tasks_added > 0: y_tasks = await yapi.get_tasks(query=yapi.get_query_in_progress(queue))
@@ -278,8 +278,8 @@ async def sync_services(queue: str, sync_mode: str, board_id: int, to_get_follow
     await yapi.batch_move_tasks_status(g_tasks_all, y_tasks)
     await yapi.edit_tasks(g_tasks_in_progress, y_tasks, to_get_followers, use_summaries)
     await yapi.edit_tasks(g_tasks_waiting, y_tasks, to_get_followers, use_summaries, edit_descriptions=False)   
-    
     await sync_comments(g_tasks_in_progress, sync_mode)
+    
     # Release sprint
     await yapi.create_weekly_release_sprint(board_id)
 
