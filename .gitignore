@@ -6,3 +6,5 @@
 *.ini
 test.py
 *.log
+autolaunch.txt
+*.bak

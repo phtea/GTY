@@ -6,9 +6,12 @@ from logging.handlers import RotatingFileHandler
 import aiohttp
 import datetime
 import warnings
+import markdown
+
 warnings.filterwarnings("ignore", category=MarkupResemblesLocatorWarning)
 
 GANDIVA_HOST = "https://gandiva.s-stroy.ru"
+YANDEX_HOST     = "https://tracker.yandex.ru"
 
 def setup_logging():
     # 10 Megabytes
@@ -19,7 +22,7 @@ def setup_logging():
     handler = RotatingFileHandler("gty.log", maxBytes=max_size, backupCount=backupCount)
 
     # Set the logging format
-    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s (%(module)s: %(funcName)s)")
     handler.setFormatter(formatter)
 
     # Add handler to the root logger
@@ -28,53 +31,9 @@ def setup_logging():
     # Set logging level
     logging.getLogger().setLevel(logging.INFO)
 
-def group_tasks_by_status(gandiva_tasks: list, yandex_tasks: list, to_filter: bool = True) -> dict:
-    """
-    Groups tasks by their current Gandiva status, with an option to filter tasks where 
-    the Gandiva task has transitioned to a new status compared to the Yandex task.
-    
-    Parameters:
-    - gandiva_tasks (list): List of tasks from Gandiva.
-    - yandex_tasks (list): List of tasks from Yandex.
-    - filter (bool): If True, only tasks where Gandiva status > Yandex status are grouped. 
-                     If False, all tasks are grouped by their Gandiva status.
-    
-    Returns:
-    - dict: Dictionary grouping tasks by their Gandiva status.
-    """
-    grouped_tasks = {}
 
-    for g_task in gandiva_tasks:
-        # Step 1: Get the Gandiva task ID and status
-        g_task_id = g_task['Id']
-        g_status = g_task['Status']
 
-        # Step 2: Get the Yandex task based on Gandiva task ID
-        y_task = next((task for task in yandex_tasks if task.get(yapi.YA_FIELD_ID_GANDIVA_TASK_ID) == str(g_task_id)), None)
-        if not y_task:
-            continue
-
-        # Step 3: Get the current status of the Yandex task
-        y_status = y_task.get('status').get('key')
-
-        # Step 4: Convert statuses using helper functions
-        current_g_status = get_transition_from_gandiva_status(g_status)[:-4]
-        current_g_status_step = get_ya_status_step(current_g_status)
-        current_ya_status_step = get_ya_status_step(y_status)
-
-        # Step 5: Apply filtering logic if required
-        if to_filter:
-            if current_g_status_step <= current_ya_status_step:
-                continue
-
-        # Step 6: Group tasks by Gandiva status
-        if current_g_status not in grouped_tasks:
-            grouped_tasks[current_g_status] = []
-        grouped_tasks[current_g_status].append(y_task)
-
-    return grouped_tasks
-
-def get_yandex_transition_from_status(transition: str):
+def y_status_to_y_transition(transition: str):
     return transition + "Meta"
 
 def extract_task_keys(tasks: list) -> list:
@@ -85,7 +44,7 @@ def extract_task_ids(tasks: list) -> list:
     """Extracts the 'Id' values from a list of tasks."""
     return [task.get('Id') for task in tasks if 'Id' in task]
 
-def get_ya_status_step(ya_status):
+def y_status_to_step(y_status):
     status_to_step = {
         "open": 0,
         "onenew": 1,
@@ -105,9 +64,31 @@ def get_ya_status_step(ya_status):
         "oneclosed": 15,
         "onecancelled": 16
     }
-    return status_to_step.get(ya_status)
+    return status_to_step.get(y_status)
 
-def get_transition_from_gandiva_status(gandiva_status):
+def y_step_to_status(y_step):
+    step_to_status = {
+        0: "open",
+        1: "onenew",
+        2: "twowaitingfortheanalyst",
+        3: "threewritingtechnicalspecific",
+        4: "fourinformationrequired",
+        5: "fiveapprovaloftheTOR",
+        6: "sixwaitingforthedeveloper",
+        7: "sevenprogramming",
+        8: "eightreadyfortesting",
+        9: "testingbyananalystQA",
+        10: "correctionoftherevision",
+        11: "writinginstructions",
+        12: "testingbytheinitiatorinthetest",
+        13: "readyforrelease",
+        14: "acceptanceintheworkbase",
+        15: "oneclosed",
+        16: "onecancelled"
+    }
+    return step_to_status.get(y_step)
+
+def get_y_transition_from_g_status(g_status):
     status_to_transition = {
         3: "onenewMeta",
         4: "fourinformationrequiredMeta",
@@ -121,16 +102,31 @@ def get_transition_from_gandiva_status(gandiva_status):
         12: "twowaitingfortheanalystMeta",
         13: "threewritingtechnicalspecificMeta"
     }
-    return status_to_transition.get(gandiva_status)
+    return status_to_transition.get(g_status)
 
+def g_to_y_status(g_status):
+    g_status_to_y_status = {
+        3: "onenew",
+        4: "fourinformationrequired",
+        5: "onecancelled",
+        6: "threewritingtechnicalspecific",
+        7: "onecancelled",
+        8: "acceptanceintheworkbase",
+        9: "oneclosed",
+        10: "twowaitingfortheanalyst",
+        11: "twowaitingfortheanalyst",
+        12: "twowaitingfortheanalyst",
+        13: "threewritingtechnicalspecific"
+    }
+    return g_status_to_y_status.get(g_status)
 
 def extract_text_from_html(html):
     soup = BeautifulSoup(html, "html.parser")
     return soup.get_text()
 
-def get_all_unique_initiators(gandiva_tasks):
+def get_all_unique_initiators(g_tasks):
     """Extract unique Initiator IDs"""
-    unique_initiator_ids = {task['Initiator']['Id'] for task in gandiva_tasks}
+    unique_initiator_ids = {task['Initiator']['Id'] for task in g_tasks}
 
     # Convert to a list (if needed)
     unique_initiator_ids_list = list(unique_initiator_ids)
@@ -188,7 +184,87 @@ def html_to_yandex_format(html):
     # Final text extraction
     return soup.get_text().strip()
 
-def gandiva_to_yandex_date(gandiva_date: str) -> str:
+def markdown_to_html_old(markdown_text):
+    """
+    Converts markdown-style links and images back to HTML format.
+    Handles links, images, and newlines properly.
+    Prepend YANDEX_HOST if the link doesn't have a host (i.e., it's a relative URL).
+    """
+
+    # Remove leading '!' for image links (to just show the link instead of embedding the image)
+    markdown_text = markdown_text.replace("![" , "[")  # Remove '!' from the markdown images
+
+    # Convert markdown links back to HTML <a> tags
+    markdown_text = re.sub(
+        r'\[([^\]]+)\]\(([^)]+)\)', 
+        lambda match: f'<a href="{match.group(2) if re.match(r"^https?://", match.group(2)) else YANDEX_HOST + match.group(2)}">{match.group(1)}</a>',
+        markdown_text
+    )
+    
+    
+    # Convert markdown image links back to HTML <img> tags (with a placeholder for alt text)
+    markdown_text = re.sub(
+        r'\[Картинка (\d+)\]\(([^)]+)\)',
+        lambda match: f'<img src="{match.group(2) if re.match(r"^https?://", match.group(2)) else YANDEX_HOST + match.group(2)}" alt="Картинка {match.group(1)}" />',
+        markdown_text
+    )
+
+    # Convert newlines to <br> or wrap paragraphs in <p> tags
+    paragraphs = markdown_text.split("\n")
+    html_text = "".join([f"<p>{p}</p>" if p else "<br />" for p in paragraphs])
+
+    # Use BeautifulSoup to clean and format the final HTML output
+    soup = BeautifulSoup(html_text, "html.parser")
+    
+    return str(soup)
+
+def markdown_to_html(markdown_text):
+    """
+    Converts markdown-style links and images back to HTML format.
+    Handles links, images, and newlines properly.
+    Prepend YANDEX_HOST if the link doesn't have a host (i.e., it's a relative URL).
+    """
+    html_text = markdown.markdown(markdown_text)
+    html_text = prepend_host_to_relative_links(html_text, YANDEX_HOST)
+    # html_text = wrap_raw_urls_in_html(html_text, YANDEX_HOST)
+    html_text = handle_raw_urls_to_html(html_text)
+    
+    return html_text
+
+def prepend_host_to_relative_links(html_text, host):
+    """
+    Adds host to relative URLs in <a> and <img> tags in the given HTML content.
+    """
+    soup = BeautifulSoup(html_text, "html.parser")
+
+    # Find all <a> tags
+    for a in soup.find_all('a'):
+        href = a.get('href', '')
+        if not re.match(r'^https?://', href):  # If the href doesn't start with http(s), it's relative
+            a['href'] = host + href  # Prepend the host to the href
+
+    # Find all <img> tags
+    for img in soup.find_all('img'):
+        src = img.get('src', '')
+        if not re.match(r'^https?://', src):  # If the src doesn't start with http(s), it's relative
+            img['src'] = host + src  # Prepend the host to the src
+
+    return str(soup)
+
+def handle_raw_urls_to_html(text):
+    url_pattern = r'(?<!["\'])\bhttps?://[^\s<>"]+'  # Regex to match raw URLs not inside quotes or tags
+    
+    # Function to replace raw URLs with the link itself
+    def replace_with_attachment(match):
+        url = match.group(0)  # Full URL match
+        return f'<a href="{url}">{url}</a>'  # Use the URL as the link text
+    
+    # Use re.sub to replace only raw URLs
+    html_text = re.sub(url_pattern, replace_with_attachment, text)
+    
+    return html_text
+
+def g_to_y_date(gandiva_date: str) -> str:
     """
     Converts a Gandiva date (with time and timezone) to Yandex date (only date part).
     Args:
@@ -237,15 +313,35 @@ async def make_http_request(method, url, headers=None, body=None, session=None):
 async def _make_request(session, method, url, headers, body):
     """
     Helper function to make an HTTP request using a given session.
+    Handles both JSON/text responses and binary file downloads.
     """
     async with session.request(method, url, headers=headers, data=body) as response:
         status_code = response.status
-        response_text = await response.text()  # For logging purposes
-        
+        content_type = response.headers.get('Content-Type', '')
+
+        # Handle successful responses
         if status_code in [200, 201]:
-            return await response.json()  # Return the JSON response
+            # Check if response is JSON or text
+            if 'application/json' in content_type or 'text' in content_type:
+                response_text = await response.text()  # For logging and return JSON data
+                try:
+                    return await response.json()  # Return the JSON response
+                except Exception as e:
+                    logging.error(f"Failed to parse JSON: {e}")
+                    return response_text  # Return text if not valid JSON
+            else:
+                # Handle binary content (e.g., file download)
+                response_data = await response.read()
+                return response_data  # Return the binary data (e.g., file contents)
+
+        # Handle 204 No Content
+        if status_code == 204:
+            return True
+
+        # Handle other response statuses
         else:
-            logging.error(f"Request to {url} failed with status {status_code}: {response_text}")
+            # Log error with as much info as possible
+            logging.error(f"Request to {url} failed with status {status_code}: {response.reason}")
             return None
 
 # Manual mapping of month names in Russian
@@ -266,52 +362,61 @@ MONTHS_RUSSIAN = {
 
 def extract_department_analysts(csv_file: str) -> dict:
     """
-    Extracts departments and their corresponding analyst emails from the given CSV file.
+    Extracts departments, their corresponding activity direction (НД), and analyst emails from the given CSV file.
 
     Parameters:
-    - csv_file (str): Path to the CSV file containing department and analyst information.
+    - csv_file (str): Path to the CSV file containing department, НД, and analyst information.
 
     Returns:
-    - dict: A dictionary where the keys are department names and the values are the corresponding analyst emails.
+    - dict: A dictionary where the keys are department names and the values are dictionaries containing 'НД' and 'yandex_analyst_mail'.
     """
     department_analyst_dict = {}
 
     # Try a different encoding, such as ISO-8859-1 or cp1251
-    with open(csv_file, mode='r', encoding='cp1251') as file:  # Change encoding here
+    with open(csv_file, mode='r', encoding='cp1251') as file:
         reader = csv.DictReader(file, delimiter=';')
 
         for row in reader:
             department = row['department']
+            nd = row['НД']  # Extract the НД column
             analyst_email = row['yandex_analyst_mail']
 
-            # Store the analyst email corresponding to the department
-            department_analyst_dict[department] = analyst_email
+            # Store the НД and analyst email corresponding to the department
+            department_analyst_dict[department] = {
+                'НД': nd,
+                'yandex_analyst_mail': analyst_email
+            }
 
     return department_analyst_dict
 
-def map_department_to_user_id(department_analyst_dict: dict, users: list) -> dict:
+def map_department_nd_to_user_id(department_analyst_dict: dict, users: list) -> dict:
     """
-    Maps each department to the corresponding user ID based on matching email addresses.
+    Maps each department and НД (activity direction) to the corresponding user ID based on matching email addresses.
 
     Parameters:
-    - department_analyst_dict (dict): A dictionary where the keys are department names and the values are analyst emails.
+    - department_analyst_dict (dict): A dictionary where the keys are department names and the values are dictionaries 
+      containing 'НД' and 'yandex_analyst_mail'.
     - users (list): A list of user objects, where each object contains an 'email' and 'uid' key.
 
     Returns:
-    - dict: A dictionary where the keys are department names and the values are the corresponding user IDs (uids).
+    - dict: A dictionary where the keys are tuples of (department, НД) and the values are the corresponding user IDs (uids).
     """
     department_user_mapping = {}
 
     # Create a dictionary to quickly lookup user 'uid' by their email
     email_to_uid = {user['email']: user['uid'] for user in users}
 
-    # Iterate over each department and find the matching uid for the analyst's email
-    for department, email in department_analyst_dict.items():
+    # Iterate over each department and НД, and find the matching uid for the analyst's email
+    for department, details in department_analyst_dict.items():
+        email = details['yandex_analyst_mail']
+        nd = details['НД']  # Extract the НД value
         uid = email_to_uid.get(email)  # Find the user 'uid' by email
+        department = department.strip()
+
         if uid:
-            department_user_mapping[department] = uid
+            department_user_mapping[(department, nd)] = uid
         else:
-            logging.warning(f"No user found with email {email} for department {department}")
+            logging.warning(f"No user found with email {email} for department {department} and НД {nd}")
 
     return department_user_mapping
 
@@ -334,6 +439,34 @@ def extract_it_users(csv_file_path: str) -> dict:
             gandiva_mail = row['gandiva_mail']
             it_users_dict[yandex_mail] = gandiva_mail
 
+    return it_users_dict
+
+def extract_it_users_from_excel(excel_sheets: dict) -> dict:
+    """
+    Extracts data from the 'it_users' Excel sheet and returns a dictionary where
+    yandex_mail is the key and gandiva_mail is the value.
+
+    :param excel_sheets: Dictionary of sheets read from the Excel file (with sheet names as keys).
+    :return: A dictionary with yandex_mail as keys and gandiva_mail as values.
+    """
+    it_users_dict = {}
+
+    # Access the 'it_users' sheet
+    if 'it_users' in excel_sheets:
+        df = excel_sheets['it_users']
+
+        # Ensure the columns are present
+        if {'yandex_mail', 'gandiva_mail'}.issubset(df.columns):
+            # Iterate through the rows and map yandex_mail to gandiva_mail
+            for _, row in df.iterrows():
+                yandex_mail = row['yandex_mail']
+                gandiva_mail = row['gandiva_mail']
+                it_users_dict[yandex_mail] = gandiva_mail
+        else:
+            raise ValueError("Required columns ('yandex_mail', 'gandiva_mail') are missing in the sheet.")
+    else:
+        raise ValueError("Sheet 'it_users' not found in the Excel file.")
+    
     return it_users_dict
 
 async def map_emails_to_ids(it_users_dict: dict, ya_users: list) -> dict:
@@ -392,7 +525,7 @@ def extract_unique_gandiva_users(g_tasks: list) -> dict:
 
     return unique_users
 
-def map_it_uids_to_gandiva_ids(it_uids: dict, g_users: dict) -> dict:
+def map_it_uids_to_g_ids(it_uids: dict, g_users: dict) -> dict:
     """
     Maps Yandex user IDs to Gandiva user IDs based on email matching.
     
@@ -411,26 +544,41 @@ def map_it_uids_to_gandiva_ids(it_uids: dict, g_users: dict) -> dict:
 
     return mapped_ids
 
-def extract_task_ids_from_summaries(ya_tasks):
+def extract_task_id_from_summary(summary):
     """
-    Extracts task IDs from the 'summary' field of each task in ya_tasks and detects duplicates.
+    Extracts a task ID from a single summary string.
 
-    :param ya_tasks: List of task dictionaries containing 'summary' and 'key' fields.
+    :param summary: A string containing the task summary.
+    :return: The extracted task ID, or None if no match is found.
+    """
+    # Use a regex to match the task ID at the start of the summary
+    summary = summary.strip()
+    match = re.match(r'^(\d+)', summary)
+    
+    if match:
+        return match.group(1)  # Return the matched task ID
+    else:
+        return None
+
+
+def extract_task_ids_from_summaries(y_tasks):
+    """
+    Extracts task IDs from the 'summary' field of each task in y_tasks and detects duplicates.
+
+    :param y_tasks: List of task dictionaries containing 'summary' and 'key' fields.
     :return: A dictionary with task_id as keys and ya_task_key as values.
     """
     task_info_dict = {}
     seen_task_ids = set()  # To track task IDs we've already encountered
 
-    for task in ya_tasks:
+    for task in y_tasks:
         summary = task.get('summary', '')
         ya_task_key = task.get('key')  # Extract the 'key' field
 
-        # Use a regex to match the task ID at the start of the summary
-        match = re.match(r'^(\d+)', summary)
+        # Extract the task ID from the summary
+        task_id = extract_task_id_from_summary(summary)
 
-        if match:
-            task_id = match.group(1)  # Get the matched task ID
-            
+        if task_id:
             if task_id in seen_task_ids:
                 logging.warning(f"Duplicate task ID found: {task_id}")
             else:
@@ -439,34 +587,50 @@ def extract_task_ids_from_summaries(ya_tasks):
 
     return task_info_dict
 
-def extract_task_ids_from_gandiva_task_id(ya_tasks):
+def extract_gandiva_task_id_from_task(task):
     """
-    Extracts task IDs from the 'GandivaTaskId' field of each task in ya_tasks and detects duplicates.
+    Extracts the Gandiva task ID from a single task dictionary.
 
-    :param ya_tasks: List of task dictionaries containing 'summary' and 'key' fields.
-    :return: A dictionary with task_id as keys and ya_task_key as values.
+    :param task: A task dictionary containing the GandivaTaskId.
+    :return: The Gandiva task ID or None if no task ID is found.
+    """
+    return task.get(yapi.YA_FIELD_ID_GANDIVA_TASK_ID)
+
+
+def extract_task_ids_from_gandiva_task_id(y_tasks):
+    """
+    Extracts task IDs from the 'GandivaTaskId' field of each task in y_tasks and detects duplicates.
+
+    :param y_tasks: List of task dictionaries containing 'GandivaTaskId' and 'key' fields.
+    :return: A dictionary with gandiva_task_id as keys and ya_task_key as values.
     """
     task_info_dict = {}
+    seen_gandiva_task_ids = set()  # To track task IDs we've already encountered
 
-    for task in ya_tasks:
-        gandiva_task_id = task.get(yapi.YA_FIELD_ID_GANDIVA_TASK_ID)
+    for task in y_tasks:
+        gandiva_task_id = extract_gandiva_task_id_from_task(task)
         ya_task_key = task.get('key')  # Extract the 'key' field
-        if not gandiva_task_id: continue
-        task_info_dict[gandiva_task_id] = ya_task_key
+
+        if gandiva_task_id:
+            if gandiva_task_id in seen_gandiva_task_ids:
+                logging.warning(f"Duplicate Gandiva task ID found: {gandiva_task_id}")
+            else:
+                task_info_dict[gandiva_task_id] = ya_task_key
+                seen_gandiva_task_ids.add(gandiva_task_id)
 
     return task_info_dict
 
-def find_unmatched_tasks(ya_tasks, extracted_task_ids):
+def find_unmatched_tasks(y_tasks, extracted_task_ids):
     """
     Finds tasks whose IDs could not be extracted from the 'summary' field.
 
-    :param ya_tasks: List of task dictionaries containing 'summary' fields.
+    :param y_tasks: List of task dictionaries containing 'summary' fields.
     :param extracted_task_ids: Set of task IDs that were successfully extracted.
     :return: List of tasks (summaries) that were not found during extraction.
     """
     unmatched_tasks = []
 
-    for task in ya_tasks:
+    for task in y_tasks:
         summary = task.get('summary', '')
         
         # Extract the task ID using regex
@@ -497,14 +661,177 @@ def extract_observers_from_detailed_task(detailed_task: dict) -> list:
 
     return observer_ids
 
+def task_exists_in_list(g_tasks, task_id):
+    """
+    Check if a task with the specified ID exists in the list of tasks.
+    
+    :param g_tasks: List of task dictionaries, each containing an 'Id' field.
+    :param task_id: The task ID to search for.
+    :return: True if the task exists, False otherwise.
+    """
+    for task in g_tasks:
+        if task.get('Id') == task_id:
+            return True
+    return False
+
+def g_addressee_exists(addressees, addressee_id):
+    for addressee in addressees:
+        if addressee['User']['Id'] == addressee_id:
+            return True
+    return False
+
+def remove_mentions(text: str) -> str:
+    """
+    Removes @xxxxx mentions from the given text.
+
+    :param text: The text from which to remove mentions.
+    :return: The text with all mentions removed.
+    """
+    # Use regex to find and remove all occurrences of @ followed by non-space characters
+    return re.sub(r'@\S+', '', text).strip()
+
+def is_id_in_summonees(y_author_id: str, y_summonees: list) -> bool:
+    """
+    Check if y_author_id is present in the 'id' field of summonees.
+
+    :param y_author_id: The author ID to check for.
+    :param summonees: A list of dictionaries representing the summonees.
+    :return: True if y_author_id is found in summonees, False otherwise.
+    """
+    for summonee in y_summonees:
+        if summonee.get('id') == y_author_id:
+            return True
+    return False
+
+def extract_existing_comments_from_gandiva(g_comments):
+    """
+    Extracts the existing comments from Gandiva and returns two mappings:
+    - existing_g_comments: A mapping of y_comment_id to g_comment_id.
+    - comment_texts_in_gandiva: A mapping of y_comment_id to g_text.
+    
+    :param g_comments: List of Gandiva comments.
+    :return: Two dictionaries - existing_g_comments and comment_texts_in_gandiva.
+    """
+    existing_g_comments = {}
+    comment_texts_in_gandiva = {}
+
+    for g_comment in g_comments:
+        g_text = g_comment['Text']
+        match = re.match(r'\[(\d+)\]', g_text)  # Match [g_comment_id] format
+        if match:
+            y_comment_id = match.group(1)
+            g_comment_id = g_comment.get('Id')  # Assuming 'Id' is the g_comment_id in the g_comment object
+            existing_g_comments[y_comment_id] = g_comment_id  # Map y_comment_id to g_comment_id
+            comment_texts_in_gandiva[y_comment_id] = g_text  # Map y_comment_id to g_text
+
+    return existing_g_comments, comment_texts_in_gandiva
+
+def is_g_comment_author_this(g_comment, author_id):
+    return True if g_comment.get('Author') and g_comment.get('Author').get('Id') and str(g_comment.get('Author').get('Id')) == str(author_id) else False
+
+def format_attachments(g_attachments):
+    """
+    Formats a list of attachments into a string with numbered links.
+
+    :param g_attachments: A list of dictionaries containing attachment details.
+    :return: A formatted string listing the attachments with links.
+    """
+    if not g_attachments:
+        return ""
+
+    attachments_text = "Вложения:\n"
+    base_url = "https://gandiva.s-stroy.ru/Resources/Attachment/"
+
+    for i, attachment in enumerate(g_attachments, start=1):
+        # Extract the attachment's name and GUID to create the link
+        attachment_name = attachment.get('Name', 'Unnamed attachment')
+        guid = attachment.get('Guid')
+        
+        # Construct the attachment line with a number, name, and link
+        if guid:
+            attachment_link = f"{base_url}{guid}"
+            attachments_text += f"{i}. [{attachment_name}]({attachment_link})\n"
+        else:
+            attachments_text += f"{i}. {attachment_name} (no link available)\n"
+
+    return attachments_text
+
+def get_next_year_datetime():
+    # Get the current year
+    current_year = datetime.datetime.now().year
+    
+    # Calculate the next year
+    next_year = current_year + 1
+    
+    # Return the next year's January 1st in the desired format
+    next_year_datetime = f"{next_year}-01-01T00:00:00+03:00"
+    
+    return next_year_datetime
+
+import pandas as pd
+import io
+def read_excel_from_bytes(excel_bytes):
+    """
+    Reads an Excel file from bytes and returns a pandas DataFrame.
+    
+    :param excel_bytes: The byte content of an Excel file.
+    :return: A dictionary of DataFrames, where the keys are sheet names and values are DataFrames.
+    """
+    try:
+        # Create a BytesIO object from the byte data
+        excel_io = io.BytesIO(excel_bytes)
+        
+        # Read the Excel file using pandas
+        # pd.read_excel can handle both single-sheet and multi-sheet Excel files.
+        xls = pd.read_excel(excel_io, sheet_name=None)  # Read all sheets into a dictionary of DataFrames
+        
+        return xls  # Returns a dictionary where keys are sheet names, and values are DataFrames
+    except Exception as e:
+        print(f"Error reading Excel from bytes: {e}")
+        return None
+
+def extract_department_analysts_from_excel(excel_sheets: dict) -> dict:
+    """
+    Extracts departments, their corresponding activity direction (НД), and analyst emails from the given Excel sheet.
+
+    Parameters:
+    - excel_sheets (dict): Dictionary of sheets read from the Excel file (with sheet names as keys).
+
+    Returns:
+    - dict: A dictionary where the keys are department names and the values are dictionaries containing 'НД' and 'yandex_analyst_mail'.
+    """
+    department_analyst_dict = {}
+
+    # Access the 'department_analyst_nd' sheet
+    if 'department_analyst_nd' in excel_sheets:
+        df = excel_sheets['department_analyst_nd']
+
+        # Ensure the columns are present
+        if {'department', 'НД', 'yandex_analyst_mail'}.issubset(df.columns):
+            # Iterate through the rows to populate the dictionary
+            for _, row in df.iterrows():
+                department = row['department']
+                nd = row['НД']  # Extract the НД column
+                analyst_email = row['yandex_analyst_mail']
+
+                # Store the НД and analyst email corresponding to the department
+                department_analyst_dict[department] = {
+                    'НД': nd,
+                    'yandex_analyst_mail': analyst_email
+                }
+        else:
+            raise ValueError("Required columns ('department', 'НД', 'yandex_analyst_mail') are missing in the sheet.")
+    else:
+        raise ValueError("Sheet 'department_analyst_nd' not found in the Excel file.")
+    
+    return department_analyst_dict
+
+
+
 import yandex_api as yapi
 import gandiva_api as gapi
-import asyncio    
-async def main():
-    query = 'Resolution: empty() "Status Type": !cancelled "Status Type": !done Queue: TEA "Sort by": Updated DESC'
-    ya_tasks = await yapi.get_all_tasks(query=query)
-    tasks_ids_from_summaries = extract_task_ids_from_summaries(ya_tasks)
-    unmatched_tasks = find_unmatched_tasks(ya_tasks, tasks_ids_from_summaries)
+import asyncio
+async def main():        
     pass
 
 

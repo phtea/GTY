@@ -1,8 +1,9 @@
 import logging
-from sqlalchemy import create_engine, Column, String, ForeignKey, Table
+from sqlalchemy import create_engine, Column, String, ForeignKey, Table, func
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker, Session
 from sqlalchemy.exc import NoResultFound, IntegrityError
 import yandex_api
+import utils
 
 Base = declarative_base()
 
@@ -13,6 +14,7 @@ class Task(Base):
     task_id_yandex = Column(String, primary_key=True)
     task_id_gandiva = Column(String, nullable=False)
 
+
 # 2. Users Table
 class User(Base):
     __tablename__ = 'users'
@@ -20,25 +22,20 @@ class User(Base):
     yandex_user_id = Column(String, primary_key=True)
     gandiva_user_id = Column(String, nullable=True)
 
-    departments = relationship("UserDepartment", back_populates="user")
+    # Relationship with departments (one-to-many)
+    departments = relationship("Department", back_populates="analyst")
+
 
 # 3. Departments Table
 class Department(Base):
     __tablename__ = 'departments'
 
     department_name = Column(String, primary_key=True)
+    nd = Column(String)  # Field for 'НД'
+    yandex_user_id = Column(String, ForeignKey('users.yandex_user_id'), nullable=False)  # Analyst for the department
 
-    user_departments = relationship("UserDepartment", back_populates="department")
-
-# 4. UserDepartments Table (Junction Table)
-class UserDepartment(Base):
-    __tablename__ = 'user_departments'
-
-    yandex_user_id = Column(String, ForeignKey('users.yandex_user_id'), primary_key=True)
-    department_name = Column(String, ForeignKey('departments.department_name'), primary_key=True)
-
-    user = relationship("User", back_populates="departments")
-    department = relationship("Department", back_populates="user_departments")
+    # Relationship with user (analyst)
+    analyst = relationship("User", back_populates="departments")
 
 
 # Creating the Database and Tables
@@ -56,7 +53,7 @@ def get_session(engine):
 
 
 # Functions here
-def get_task_by_gandiva_id(session: Session, task_id_gandiva: str):
+def get_task_by_gandiva_id(session: Session, g_task_id: str):
     """
     Find a task in the database by its Gandiva ID.
 
@@ -65,7 +62,7 @@ def get_task_by_gandiva_id(session: Session, task_id_gandiva: str):
     :return: The Task object if found, otherwise None.
     """
     try:
-        task = session.query(Task).filter_by(task_id_gandiva=task_id_gandiva).one_or_none()
+        task = session.query(Task).filter_by(task_id_gandiva=g_task_id).one_or_none()
         return task
     except NoResultFound:
         return None
@@ -91,32 +88,31 @@ def update_database_schema(engine):
     # Recreate the tables with the new schema
     Base.metadata.create_all(engine)
 
-def add_task_no_commit(session: Session, task_data: dict):
+def add_task_no_commit(session: Session, y_task: dict):
     """
     Add a single task to the database or update it if it exists.
     :param session: SQLAlchemy session object.
     :param task_data: Dictionary containing 'key' (task_id_yandex) and YA_FIELD_ID_GANDIVA_TASK_ID (task_id_gandiva).
     :return: None
     """
-    task_id_yandex = task_data.get('key')
-    task_id_gandiva = task_data.get(yandex_api.YA_FIELD_ID_GANDIVA_TASK_ID)
+    y_task_id         = y_task.get('key')
+    g_task_id         = y_task.get(yandex_api.YA_FIELD_ID_GANDIVA_TASK_ID)
     
-    if not task_id_gandiva:
-        logging.warning(f"No Gandiva ID found for Yandex task {task_id_yandex}, skipping.")
+    if not g_task_id:
+        logging.debug(f"No Gandiva ID found for Yandex task {y_task_id}, skipping.")
         return
-
     # Check if the task already exists by task_id_yandex
-    existing_task = session.query(Task).filter_by(task_id_yandex=task_id_yandex).one_or_none()
+    existing_task = session.query(Task).filter_by(task_id_yandex=y_task_id).one_or_none()
 
     if not existing_task:
         # If the task doesn't exist, create a new task and add it to the session
-        new_task = Task(task_id_yandex=task_id_yandex, task_id_gandiva=task_id_gandiva)
+        new_task = Task(task_id_yandex=y_task_id, task_id_gandiva=g_task_id)
         session.add(new_task)
-        logging.info(f"Task {task_id_yandex} added to the database.")
+        logging.info(f"Task {y_task_id} added to the database.")
     else:
-        logging.debug(f"Task {task_id_yandex} already exists in the database.")
+        logging.debug(f"Task {y_task_id} already exists in the database.")
 
-def add_tasks(session: Session, tasks: list):
+def add_tasks(session: Session, y_tasks: list):
     """
     Add a list of tasks to the database by calling `add_task` for each task.
     :param session: SQLAlchemy session object.
@@ -125,59 +121,61 @@ def add_tasks(session: Session, tasks: list):
     """
     total_tasks = 0
 
-    for task_data in tasks:
-        add_task_no_commit(session, task_data)  # Call the add_task function for each task
+    for y_task in y_tasks:
+        add_task_no_commit(session, y_task)  # Call the add_task function for each task
         total_tasks += 1
 
     # Commit the changes to the database
     session.commit()
     logging.info(f"{total_tasks} tasks added/updated in the database.")
 
-def add_user_department_mapping(session: Session, department_user_mapping: dict):
+def add_user_department_nd_mapping(session: Session, department_user_mapping: dict):
     """
-    Adds or updates the user and department relationship in the database.
+    Adds or updates the user and department relationship in the database, considering both the department and НД fields.
 
     :param session: SQLAlchemy session object.
-    :param department_user_mapping: A dictionary where keys are department names, and values are user IDs.
+    :param department_user_mapping: A dictionary where keys are tuples (department_name, nd), and values are user IDs.
     """
     total_entries = 0
+    skipped_entries = 0
 
-    for department_name, user_id in department_user_mapping.items():
+    for (department_name, nd), y_user_id in department_user_mapping.items():
+        y_user_id = str(y_user_id)
+        department_name = department_name.strip()
         # Check if the user exists in the database
-        user = session.query(User).filter_by(yandex_user_id=user_id).one_or_none()
+        user = session.query(User).filter_by(yandex_user_id=y_user_id).one_or_none()
 
         if not user:
             # If the user doesn't exist, create and add a new user
-            user = User(yandex_user_id=user_id)
+            user = User(yandex_user_id=y_user_id)
             session.add(user)
-            logging.info(f"User {user_id} added to the database.")
+            logging.info(f"User {y_user_id} added to the database.")
 
         # Check if the department exists in the database
         department = session.query(Department).filter_by(department_name=department_name).one_or_none()
 
         if not department:
-            # If the department doesn't exist, create and add a new department
-            department = Department(department_name=department_name)
+            # If the department doesn't exist, create and add a new department with the НД field
+            department = Department(department_name=department_name, nd=nd, yandex_user_id=y_user_id)
             session.add(department)
-            logging.info(f"Department {department_name} added to the database.")
+            logging.info(f"Department {department_name} with НД {nd} added to the database and assigned to user {y_user_id}.")
+            total_entries += 1
+        else:
+            # Check if both the department's ND and yandex_user_id match the incoming data
+            if department.nd == nd and department.yandex_user_id == y_user_id:
+                # If the department is already up to date, skip the update
+                logging.debug(f"Department {department_name} is already up-to-date with user {y_user_id} and НД {nd}. Skipping update.")
+                skipped_entries += 1
+            else:
+                # Update department's ND field and user if needed
+                department.nd = nd
+                department.yandex_user_id = y_user_id
+                logging.info(f"Department {department_name} updated with НД {nd} and assigned to user {y_user_id}.")
+                total_entries += 1
 
-        # Check if the relationship between the user and department already exists
-        user_department = session.query(UserDepartment).filter_by(
-            yandex_user_id=user_id,
-            department_name=department_name
-        ).one_or_none()
+    session.commit()  # Commit all changes at once
+    logging.info(f"{total_entries} user-department mappings added/updated in the database. {skipped_entries} entries skipped.")
 
-        if not user_department:
-            # If the relationship doesn't exist, create it
-            user_department = UserDepartment(yandex_user_id=user_id, department_name=department_name)
-            session.add(user_department)
-            logging.info(f"User {user_id} assigned to department {department_name}.")
-
-        total_entries += 1
-
-    # Commit the changes to the database
-    session.commit()
-    logging.info(f"{total_entries} user-department mappings added to the database.")
 
 def get_user_id_by_department(session: Session, department_name: str) -> str:
     """
@@ -188,11 +186,11 @@ def get_user_id_by_department(session: Session, department_name: str) -> str:
     :return: The user ID associated with the department, or None if no user is found.
     """
     try:
-        # Query the UserDepartment table to find the user associated with the department
-        user_department = session.query(UserDepartment).filter_by(department_name=department_name).one_or_none()
+        # Query the Department table to find the user associated with the department
+        department = session.query(Department).filter_by(department_name=department_name).one_or_none()
 
-        if user_department:
-            return user_department.yandex_user_id
+        if department:
+            return department.yandex_user_id
         else:
             logging.warning(f"No user found for department: {department_name}")
             return None
@@ -208,29 +206,29 @@ def add_or_update_user(session: Session, user_data: dict):
     :param user_data: Dictionary where keys are yandex_user_id and values are gandiva_user_id.
                       Example: {2332300: 60, ...}
     """
-    for yandex_user_id, gandiva_user_id in user_data.items():
+    for y_user_id, g_user_id in user_data.items():
         try:
             # Check if the user exists by yandex_user_id
-            user = session.query(User).filter_by(yandex_user_id=str(yandex_user_id)).one_or_none()
+            user = session.query(User).filter_by(yandex_user_id=str(y_user_id)).one_or_none()
 
             if user:
                 # If the user exists but gandiva_user_id is empty or None, update it
                 if not user.gandiva_user_id:
-                    user.gandiva_user_id = str(gandiva_user_id)
+                    user.gandiva_user_id = str(g_user_id)
                     session.commit()
-                    logging.info(f"Updated user {yandex_user_id} with Gandiva ID {gandiva_user_id}.")
+                    logging.info(f"Updated user {y_user_id} with Gandiva ID {g_user_id}.")
                 else:
-                    logging.debug(f"User {yandex_user_id} already exists with Gandiva ID {user.gandiva_user_id}. No update required.")
+                    logging.debug(f"User {y_user_id} already exists with Gandiva ID {user.gandiva_user_id}. No update required.")
             else:
                 # If the user doesn't exist, create a new user
-                new_user = User(yandex_user_id=str(yandex_user_id), gandiva_user_id=str(gandiva_user_id))
+                new_user = User(yandex_user_id=str(y_user_id), gandiva_user_id=str(g_user_id))
                 session.add(new_user)
                 session.commit()
-                logging.info(f"Added new user {yandex_user_id} with Gandiva ID {gandiva_user_id}.")
+                logging.info(f"Added new user {y_user_id} with Gandiva ID {g_user_id}.")
 
         except Exception as e:
             session.rollback()
-            logging.error(f"Error adding or updating user {yandex_user_id}: {str(e)}")
+            logging.error(f"Error adding or updating user {y_user_id}: {str(e)}")
 
 def add_or_update_task(session: Session, g_task_id: str, y_task_id: str):
     """
@@ -264,7 +262,7 @@ def add_or_update_task(session: Session, g_task_id: str, y_task_id: str):
         logging.error(f"Error adding or updating task {y_task_id}: {e}")
         session.rollback()
 
-def get_user_by_yandex_id(session: Session, yandex_user_id: str):
+def get_user_by_yandex_id(session: Session, y_user_id: str):
     """
     Retrieves a user from the database by their Yandex user ID.
 
@@ -273,16 +271,16 @@ def get_user_by_yandex_id(session: Session, yandex_user_id: str):
     :return: The User object if found, otherwise None.
     """
     try:
-        user = session.query(User).filter_by(yandex_user_id=str(yandex_user_id)).one_or_none()
+        user = session.query(User).filter_by(yandex_user_id=str(y_user_id)).one_or_none()
         return user
     except NoResultFound:
-        logging.warning(f"No user found with Yandex user ID {yandex_user_id}.")
+        logging.warning(f"No user found with Yandex user ID {y_user_id}.")
         return None
     except Exception as e:
-        logging.error(f"Error retrieving user by Yandex ID {yandex_user_id}: {str(e)}")
+        logging.error(f"Error retrieving user by Yandex ID {y_user_id}: {str(e)}")
         return None
 
-def get_user_by_gandiva_id(session: Session, gandiva_user_id: str):
+def get_user_by_gandiva_id(session: Session, g_user_id: str):
     """
     Retrieves a user from the database by their Gandiva user ID.
 
@@ -291,13 +289,31 @@ def get_user_by_gandiva_id(session: Session, gandiva_user_id: str):
     :return: The User object if found, otherwise None.
     """
     try:
-        user = session.query(User).filter_by(gandiva_user_id=str(gandiva_user_id)).one_or_none()
+        user = session.query(User).filter_by(gandiva_user_id=str(g_user_id)).one_or_none()
         return user
     except NoResultFound:
-        logging.debug(f"No user found with Gandiva user ID {gandiva_user_id}.")
+        logging.debug(f"No user found with Gandiva user ID {g_user_id}.")
         return None
     except Exception as e:
-        logging.error(f"Error retrieving user by Gandiva ID {gandiva_user_id}: {str(e)}")
+        logging.error(f"Error retrieving user by Gandiva ID {g_user_id}: {str(e)}")
+        return None
+
+def get_nd_by_department_name(session: Session, department_name: str):
+    """
+    Retrieves ND from the database by their department_name.
+
+    :param session: SQLAlchemy session object.
+    :param department_name: The department name to search for.
+    :return: ND (str) if found, otherwise None.
+    """
+    try:
+        department = session.query(Department).filter_by(department_name=str(department_name).strip()).one_or_none()
+        return department.nd
+    except NoResultFound:
+        logging.debug(f"No department found with department_name {department_name}.")
+        return None
+    except Exception as e:
+        logging.error(f"Error retrieving department by department_name {department_name}: {str(e)}")
         return None
 
 def convert_gandiva_observers_to_yandex_followers(session, gandiva_observers: list[int]) -> list[int]:
@@ -308,14 +324,32 @@ def convert_gandiva_observers_to_yandex_followers(session, gandiva_observers: li
     :param session: The SQLAlchemy session used for database queries.
     :return: A list of Yandex follower IDs.
     """
-    yandex_followers = []
-
-    for gandiva_id in gandiva_observers:
-        user = get_user_by_gandiva_id(session, gandiva_id)
-        if user and user.yandex_user_id:
-            yandex_followers.append(user.yandex_user_id)
+    yandex_followers = [
+        user.yandex_user_id for gandiva_id in gandiva_observers 
+        if (user := get_user_by_gandiva_id(session, gandiva_id)) and user.yandex_user_id
+    ]
 
     return yandex_followers
+
+def find_duplicate_gandiva_tasks(db_session: Session):
+    """
+    Logs a warning for all duplicate task_id_gandiva entries in the 'tasks' table.
+    
+    :param db_session: The SQLAlchemy session object to interact with the database.
+    """
+    # Query the database for task_id_gandiva and count how many times each appears
+    duplicates = (db_session.query(Task.task_id_gandiva, func.count(Task.task_id_gandiva).label('count'))
+                  .group_by(Task.task_id_gandiva)
+                  .having(func.count(Task.task_id_gandiva) > 1)
+                  .all())
+
+    # If duplicates found, log them
+    for gandiva_id, count in duplicates:
+        # Fetch all yandex_task_ids related to the duplicated task_id_gandiva
+        yandex_ids = db_session.query(Task.task_id_yandex).filter(Task.task_id_gandiva == gandiva_id).all()
+        yandex_ids_list = [y[0] for y in yandex_ids]  # Extract task_id_yandex from query result
+
+        logging.warning(f"Duplicate task_id_gandiva: {gandiva_id}, associated task_id_yandex: {', '.join(yandex_ids_list)}")
 
 if __name__ == '__main__':
     pass
