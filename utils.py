@@ -12,6 +12,7 @@ warnings.filterwarnings("ignore", category=MarkupResemblesLocatorWarning)
 
 GANDIVA_HOST = "https://gandiva.s-stroy.ru"
 YANDEX_HOST     = "https://tracker.yandex.ru"
+EXCEL_UPDATED_IN_YANDEX_DISK = False
 
 def setup_logging():
     # 10 Megabytes
@@ -826,6 +827,17 @@ def extract_department_analysts_from_excel(excel_sheets: dict) -> dict:
     
     return department_analyst_dict
 
+def normalize_department_name(department_name: str):
+        # Step 1: Replace NBSP (non-breaking space) with a regular space
+    department_name = department_name.replace('\u00A0', ' ')
+
+    # Step 2: Collapse multiple spaces into a single space
+    department_name = re.sub(r'\s+', ' ', department_name)
+
+    # Step 3: Trim leading/trailing spaces
+    department_name = department_name.strip()
+    
+    return department_name
 
 
 import yandex_api as yapi

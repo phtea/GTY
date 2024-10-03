@@ -575,12 +575,14 @@ def edit_field_if_different_content(y_task, field_id, new_value):
         return new_value
     return None
 
-async def update_task_if_needed(y_task, g_task_id, initiator_name, initiator_department, description, y_start_date, y_assignee, followers, nd, y_step):
+async def update_task_if_needed(y_task, g_task_id, initiator_name, initiator_department, description, y_start_date, y_assignee, followers, nd, y_step, g_contractor_id):
     """
     Check which fields need to be updated and call edit_task if any updates are necessary.
     """
     y_task_id = y_task.get('key')
     
+    if initiator_department:
+        initiator_department = utils.normalize_department_name(initiator_department)
     # Custom followers handler
     edit_followers = None
     if len(y_task.get('followers', ())) < len(followers):
@@ -595,7 +597,7 @@ async def update_task_if_needed(y_task, g_task_id, initiator_name, initiator_dep
     edit_fields = {
         'edit_initiator_name': edit_field_if_empty(y_task, YA_FIELD_ID_INITIATOR, initiator_name),
         'edit_initiator_department': edit_field_if_empty(y_task, YA_FIELD_ID_INITIATOR_DEPARTMENT, initiator_department),
-        'edit_description': edit_field_if_different_content(y_task, 'description', description),
+        'edit_description': edit_field_if_different_content(y_task, 'description', description) if description else None,
         'edit_yandex_start_date': edit_field_if_empty(y_task, 'start', y_start_date),
         'edit_assignee_yandex_id': edit_assignee,
         'edit_analyst': None,
@@ -607,9 +609,17 @@ async def update_task_if_needed(y_task, g_task_id, initiator_name, initiator_dep
 
     # Check for analyst by department
     if initiator_department:
-        initiator_department = initiator_department.strip()
         analyst = db.get_user_id_by_department(session=DB_SESSION, department_name=initiator_department)
-        edit_fields['edit_analyst'] = edit_field_if_empty(y_task, YA_FIELD_ID_ANALYST, analyst)
+        if analyst:
+            cur_y_analyst = y_task.get(YA_FIELD_ID_ANALYST, {}).get('id')
+            if utils.EXCEL_UPDATED_IN_YANDEX_DISK:
+                # Check if different content
+                if cur_y_analyst != analyst:
+                    edit_fields['edit_analyst'] = analyst
+            else:
+                # Check if empty or waiting for analyst
+                if not cur_y_analyst and g_contractor_id in [None, gandiva_api.WAITING_ANALYST_ID]:
+                    edit_fields['edit_analyst'] = analyst
 
     # If any field needs to be edited, call the edit function
     if any(edit_fields.values()):
@@ -663,7 +673,7 @@ def create_y_tasks_dict(y_tasks, use_summaries):
 
     return y_tasks_dict
 
-async def edit_tasks(g_tasks, y_tasks, to_get_followers, use_summaries=False):
+async def edit_tasks(g_tasks, y_tasks, to_get_followers, use_summaries=False, edit_descriptions=True):
     """
     Edits tasks in Yandex Tracker based on the data from Gandiva.
     Only updates tasks that are outdated.
@@ -694,10 +704,16 @@ async def edit_tasks(g_tasks, y_tasks, to_get_followers, use_summaries=False):
         g_status                = g_task['Status']
         y_status                = utils.g_to_y_status(g_status)
         y_step                  = utils.y_status_to_step(y_status)
+        g_contractor        = g_task.get('Contractor')
+        g_contractor_id     = None
+        if g_contractor:
+            g_contractor_id = g_contractor.get('Id')
+        if edit_descriptions:
+            description = await description_with_attachments(g_task_id, description)
+        else:
+            description = None
 
-        new_description = await description_with_attachments(g_task_id, description)
-
-        if await update_task_if_needed(y_task, g_task_id, initiator_name, initiator_department, new_description, y_start_date, y_assignee_id, followers, nd, y_step):
+        if await update_task_if_needed(y_task, g_task_id, initiator_name, initiator_department, description, y_start_date, y_assignee_id, followers, nd, y_step, g_contractor_id):
             edited_task_count += 1
             y_task_id = y_task['key']
             db.add_or_update_task(session=DB_SESSION, g_task_id=g_task_id, y_task_id=y_task_id)
