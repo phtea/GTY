@@ -17,8 +17,10 @@ PATH_TO_EXCEL       = config.get('Yandex', 'path_to_excel')
 # Create the database and tables
 DB_ENGINE           = db.create_database(DB_URL)
 DB_SESSION          = db.get_session(DB_ENGINE)
+
 # To test work on few tasks (for careful testing)
 FEW_DATA            = False
+TEST_FUNC           = False
 
 async def sync_comments(g_tasks, sync_mode: int, get_comments_execution: str = 'async'):
     """
@@ -114,6 +116,9 @@ async def sync_task_comments(g_task, g_comments, sync_mode):
         'edited_in_gandiva': edited_in_gandiva
     }
 
+def should_skip_comment_sync(sync_mode, sync_programmers, g_comment, g_task_contractor):
+    """Determines if the comment sync should be skipped based on sync mode and addressees."""
+    return sync_mode == sync_programmers and not is_programmer_or_contractor_in_addressees(g_comment, g_task_contractor)
 
 async def sync_gandiva_comments_to_yandex(g_task, y_task_id, g_comments, existing_y_comments, y_comment_texts, g_task_contractor, sync_mode):
     """Sync Gandiva comments to Yandex."""
@@ -121,11 +126,9 @@ async def sync_gandiva_comments_to_yandex(g_task, y_task_id, g_comments, existin
     edited_in_yandex = 0
     sync_programmers = 2
     for g_comment in g_comments:
-        if utils.is_g_comment_author_this(g_comment, gapi.GAND_ROBOT_ID):
-            continue
+        if author_g_comment_is_robot(g_comment): continue
         
-        if sync_mode == sync_programmers and not is_programmer_or_contractor_in_addressees(g_comment, g_task_contractor):
-            continue
+        if should_skip_comment_sync(sync_mode, sync_programmers, g_comment, g_task_contractor): continue
 
         g_comment_id = str(g_comment['Id'])
         g_text = utils.html_to_yandex_format(g_comment['Text'])
@@ -149,6 +152,9 @@ async def sync_gandiva_comments_to_yandex(g_task, y_task_id, g_comments, existin
     
     return added_to_yandex, edited_in_yandex
 
+def author_g_comment_is_robot(g_comment):
+    return utils.is_g_comment_author_this(g_comment, gapi.GAND_ROBOT_ID)
+
 
 async def sync_yandex_comments_to_gandiva(g_task, y_comments, existing_g_comments, g_comment_texts):
     """Sync Yandex comments to Gandiva."""
@@ -156,26 +162,33 @@ async def sync_yandex_comments_to_gandiva(g_task, y_comments, existing_g_comment
     edited_in_gandiva = 0
 
     for y_comment in y_comments:
-        y_author_id = y_comment.get('createdBy', {}).get('id')
-        if not y_author_id or y_author_id == yapi.YA_ROBOT_ID:
-            continue
         
+        if should_skip_yandex_comment(y_comment): continue
+
         y_comment_id = str(y_comment.get('id'))
         y_text_html = utils.markdown_to_html(utils.remove_mentions(y_comment.get('text', '')))
         g_addressees = get_addressees_for_g_task(g_task)
-        
+        y_comment_author = y_comment.get('createdBy', {}).get('display')
+
         if y_comment_id in existing_g_comments:
             g_comment_id = existing_g_comments.get(y_comment_id)
             g_text = g_comment_texts.get(y_comment_id).split('<br>', 1)[1]
 
             if g_text != y_text_html:
-                await gapi.edit_comment(g_comment_id, y_comment_id, y_text_html, y_comment.get('createdBy').get('display'), g_addressees)
+                await gapi.edit_comment(g_comment_id, y_comment_id, y_text_html, y_comment_author, g_addressees)
                 edited_in_gandiva += 1
         else:
-            await gapi.add_comment(g_task['Id'], y_text_html, y_comment_id, y_comment.get('createdBy').get('display'), g_addressees)
+            await gapi.add_comment(g_task['Id'], y_text_html, y_comment_id, y_comment_author, g_addressees)
             added_to_gandiva += 1
     
     return added_to_gandiva, edited_in_gandiva
+
+def should_skip_yandex_comment(y_comment):
+    y_author_id = y_comment.get('createdBy', {}).get('id')
+    if not y_author_id:
+        return None
+    y_summonees = y_comment.get('summonees', ())
+    return y_author_id == yapi.YA_ROBOT_ID or not utils.id_in_summonees_exists(yapi.YA_ROBOT_ID, y_summonees)
 
 
 def extract_yandex_comments(y_comments):
@@ -262,14 +275,25 @@ async def update_it_users_in_db(excel_obj):
     uids_y_g        = utils.map_it_uids_to_g_ids(it_uids, g_users)
     return db.add_or_update_user(session=DB_SESSION, user_data=uids_y_g)
 
-async def test(sync_mode):
-    err = True
+async def test():
+    sync_mode = 2
+    err = False
     stop = True
-    g_tasks_in_progress = await gapi.get_tasks(gapi.GroupsOfStatuses.in_progress)
-    res = await sync_comments(g_tasks_in_progress, sync_mode)
-    if res:
-        err = False
+    # g_tasks = await gapi.get_tasks(gapi.GroupsOfStatuses.in_progress) # all
+    g_tasks = [await gapi.get_task(196295)]
+    res = await sync_comments(g_tasks, sync_mode)
     return res, err, stop
+
+# Function that generates a predicate based on min and max values
+def status_in_range(min_status, max_status):
+    def predicate(task):
+        status = task.get('Status')
+        return min_status < status < max_status
+    return predicate
+
+def filter_g_tasks(g_tasks_in_progress: list[dict], value, _filter):
+    res = [value(g) for g in g_tasks_in_progress if _filter(g)]
+    return res
 
 
 # Main function to start the bot
@@ -292,8 +316,10 @@ async def main():
         queue = "TEA"
         board_id = 52
         interval_minutes = 5
-    # _, err, stop = await test(sync_mode)
-    # if stop: return
+    if TEST_FUNC:
+        _, err, stop = await test()
+        if stop: return
+
     await update_db(queue)
     # Start sync_services in the background and run every N minutes
     logging.info(f"Settings used in config:sync_mode: {sync_mode}; queue: {queue}; board_id: {board_id}; to_get_followers: {to_get_followers}; use_summaries: {use_summaries}; interval_minutes: {interval_minutes}")
