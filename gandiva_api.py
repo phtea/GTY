@@ -7,7 +7,7 @@ import json
 from utils import make_http_request
 import db_module as db
 import utils
-
+from datetime import datetime, timedelta, timezone
 
 # Path to the .ini file
 CONFIG_PATH = 'config.ini'
@@ -15,8 +15,10 @@ config = configparser.ConfigParser()
 config.read(CONFIG_PATH)
 
 # Globals
-GAND_ACCESS_TOKEN       = ''
-GAND_REFRESH_TOKEN      = ''
+GAND_ACCESS_TOKEN       = None
+GAND_REFRESH_TOKEN      = None
+GAND_TOKEN_EXPIRY_DATE  = None
+
 GAND_LOGIN              = config.get('Gandiva', 'login')
 GAND_PASSWORD           = config.get('Gandiva', 'password')
 GAND_PROGRAMMER_ID      = config.getint('Gandiva', 'programmer_id')
@@ -39,7 +41,7 @@ class GroupsOfStatuses:
 
 from functools import wraps
 
-# Define the retry decorator
+# Retry decorator
 def retry_async(max_retries=3, cooldown=5, exceptions=(Exception,)):
     """Decorator to retry an asynchronous function after failures with a cooldown."""
     def decorator(func):
@@ -60,6 +62,35 @@ def retry_async(max_retries=3, cooldown=5, exceptions=(Exception,)):
                         raise  # Reraise the exception after max retries
         return wrapper
     return decorator
+
+def token_refresh_decorator(func):
+    @wraps(func)
+    async def wrapper(*args, **kwargs):
+        global GAND_ACCESS_TOKEN
+
+        if GAND_ACCESS_TOKEN is None or await is_token_expired():
+            # If no token or it's expired, refresh it
+            logging.info("Token is missing or expired. Fetching new access token.")
+            new_token = await get_access_token(GAND_LOGIN, GAND_PASSWORD)
+            if new_token is None:
+                logging.error("Failed to retrieve access token.")
+                return None
+        return await func(*args, **kwargs)
+    return wrapper
+
+async def is_token_expired():
+    """Check if the token is expired by comparing expiration date with the current time."""
+    global GAND_TOKEN_EXPIRY_DATE
+
+    if GAND_TOKEN_EXPIRY_DATE is None:
+        logging.info("Token expiry date not set, assuming token is expired.")
+        return True
+
+    current_time = datetime.now(timezone.utc)
+    if current_time >= GAND_TOKEN_EXPIRY_DATE:
+        logging.info("Token is expired based on the expiry date.")
+        return True
+    return False
 
 # Dictionary for caching user departments
 user_department_cache = {}
@@ -97,6 +128,8 @@ async def get_access_token(login, password):
     if response:
         access_token = response.get('access_token')
         refresh_token = response.get('refresh_token')
+        expires_in = response.get('expires_in')
+
 
         # Update global tokens
         global GAND_ACCESS_TOKEN
@@ -104,6 +137,11 @@ async def get_access_token(login, password):
 
         global GAND_REFRESH_TOKEN
         GAND_REFRESH_TOKEN = refresh_token
+
+        if expires_in:
+            # Calculate the token expiry date
+            global GAND_TOKEN_EXPIRY_DATE
+            GAND_TOKEN_EXPIRY_DATE = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
         logging.info(f"Authorized user: {login} [Gandiva]")
         return access_token
     else:
@@ -156,13 +194,15 @@ def get_headers(content_type="application/json"):
 
 # Functions
 
-async def get_task(g_task_id):
+@token_refresh_decorator
+async def get_task(g_task_id: str):
     """Fetch a task by ID using the GAND API."""
     content_type = "application/x-www-form-urlencoded"
     url = f"{HOST}/api/Requests/{g_task_id}"
 
     return await make_http_request('GET', url, headers=get_headers(content_type=content_type))
 
+@token_refresh_decorator
 async def get_department_by_user_id(g_user_id):
     """Fetch department by user ID with caching."""
     if g_user_id in user_department_cache:
@@ -182,13 +222,15 @@ async def get_department_by_user_id(g_user_id):
 
     logging.error(f"Error fetching department for user {g_user_id}")
     return None
-        
+
+@token_refresh_decorator
 async def get_departments_for_users(user_ids):
     tasks = [get_department_by_user_id(user_id) for user_id in user_ids]
     departments = await asyncio.gather(*tasks)
     unique_departments = list(set(departments))
     return unique_departments     
 
+@token_refresh_decorator
 async def get_page_of_tasks(page_number: int, statuses: list[int]):
     """Fetch a page of tasks."""
     url = f"{HOST}/api/Requests/Filter"
@@ -218,6 +260,7 @@ async def get_page_of_tasks(page_number: int, statuses: list[int]):
         return None
 
 # Define the function to get comments for a specific task
+@token_refresh_decorator
 @retry_async(max_retries=3, cooldown=5)
 async def get_task_comments(g_task_id):
     """Fetch comments for a specific task."""
@@ -251,6 +294,7 @@ def get_task_by_id_from_list(task_list, task_id):
     return None  # Return None if no task with the given ID is found
 
 # Define the function to get comments for a list of task IDs with concurrency control
+@token_refresh_decorator
 async def get_comments_for_tasks_concurrently(g_task_ids: list[int]):
     """Fetch comments for a list of tasks with a limit on concurrent requests."""
     task_comments = {}
@@ -276,6 +320,7 @@ async def get_comments_for_tasks_concurrently(g_task_ids: list[int]):
     return task_comments
 
 # Define the function to get comments for a list of task IDs consecutively
+@token_refresh_decorator
 async def get_comments_for_tasks_consecutively(g_task_ids: list[int]):
     """Fetch comments for a list of tasks one at a time."""
     task_comments = {}
@@ -286,6 +331,8 @@ async def get_comments_for_tasks_consecutively(g_task_ids: list[int]):
 
     return task_comments
 
+
+@token_refresh_decorator
 async def get_tasks(statutes: list[int] = [3, 4, 6, 8, 10, 11]):
     logging.info("Fetching tasks...")
     all_requests = []
@@ -320,6 +367,7 @@ async def get_tasks(statutes: list[int] = [3, 4, 6, 8, 10, 11]):
 
     return all_requests
 
+
 def extract_tasks_by_status(g_tasks, statuses):
     """
     Extract tasks that have a status in the provided list of statuses.
@@ -331,6 +379,7 @@ def extract_tasks_by_status(g_tasks, statuses):
     return [task for task in g_tasks if task.get('Status') in statuses]
 
 # Comments functionality
+@token_refresh_decorator
 async def add_comment(g_task_id, text, y_comment_id, author_name, g_addressees=None):
     """Fetch comments for a list of tasks one at a time."""
     url = f"{HOST}/api/Requests/{g_task_id}/Comments"
@@ -356,6 +405,7 @@ async def add_comment(g_task_id, text, y_comment_id, author_name, g_addressees=N
         logging.error(f"Comment was not added to task {g_task_id}.")
         return None
 
+@token_refresh_decorator
 async def edit_comment(g_comment_id, y_comment_id, text, author_name, g_addressees=None):
     """Fetch comments for a list of tasks one at a time."""
     url = f"{HOST}/api/Common/Comments/{g_comment_id}"
@@ -381,6 +431,7 @@ async def edit_comment(g_comment_id, y_comment_id, text, author_name, g_addresse
         logging.error(f"Comment {g_comment_id} was not edited.")
         return None
 
+@token_refresh_decorator
 async def edit_task(g_task_id: int, last_modified_date: str, required_start_date: str = None):
     """edit task in Gandiva"""
     url = f"{HOST}/api/Requests/{g_task_id}"
@@ -402,6 +453,7 @@ async def edit_task(g_task_id: int, last_modified_date: str, required_start_date
         logging.error(f"Task {g_task_id} was not edited.")
         return None
 
+@token_refresh_decorator
 async def edit_task_required_start_date(g_task_id: int, last_modified_date: str, required_start_date: str):
     """edit task in Gandiva"""
     url = f"{HOST}/api/Requests/{g_task_id}/RequiredStartDate"
@@ -423,6 +475,7 @@ async def edit_task_required_start_date(g_task_id: int, last_modified_date: str,
         logging.error(f"Task's RequiredStartDate {g_task_id} was not edited.")
         return None
 
+@token_refresh_decorator
 async def edit_task_contractor(g_task_id: int, last_modified_date: str, contractor: str):
     """edit task in Gandiva"""
     url = f"{HOST}/api/Requests/{g_task_id}/Contractor"
@@ -444,32 +497,9 @@ async def edit_task_contractor(g_task_id: int, last_modified_date: str, contract
         logging.error(f"Task's Contractor {g_task_id} was not edited.")
         return None
 
-async def delete_comment(g_comment_id, text, addressees=None):
-    """Fetch comments for a list of tasks one at a time."""
-    url = f"{HOST}/api/Common/Comments/{g_comment_id}"
-
-    body = {
-    "Text": text
-    }
-
-    if addressees: body["Addressees"] = addressees
-
-    response = await make_http_request(
-        method="PUT", 
-        url=url, 
-        headers=get_headers(),
-        body=json.dumps(body)
-    )
-
-    if response:
-        logging.debug(f"Comment [{g_comment_id}] was successfully edited!")
-        return response
-    else:
-        logging.error(f"Comment [{g_comment_id}] was not edited.")
-        return None
-
+@token_refresh_decorator
 async def delete_comment(g_comment_id):
-    """Fetch comments for a list of tasks one at a time."""
+    """Delete comment."""
     url = f"{HOST}/api/Common/Comments/{g_comment_id}"
 
     response = await make_http_request(method="DELETE", url=url, headers=get_headers())
@@ -481,6 +511,7 @@ async def delete_comment(g_comment_id):
         logging.error(f"Comment [{g_comment_id}] was not deleted.")
         return None
 
+@token_refresh_decorator
 async def handle_tasks_in_work_but_waiting_for_analyst(needed_date):
     """needed_date in format: 2025-01-01T00:00:00+03:00"""
     tasks = await get_tasks(statutes=[6, 11, 13])
@@ -496,6 +527,7 @@ import time # using for timing functions
 async def main():
     pass
 
+@token_refresh_decorator
 async def handle_waiting_for_analyst_or_no_contractor_no_required_start_date(g_tasks):
     next_year = utils.get_next_year_datetime()
     g_task_anomalies = [g for g in g_tasks if not g['Contractor'] or g['Contractor']['Id'] == WAITING_ANALYST_ID and not g['RequiredStartDate']]
