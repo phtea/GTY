@@ -693,7 +693,7 @@ def remove_mentions(text: str) -> str:
     # Use regex to find and remove all occurrences of @ followed by non-space characters
     return re.sub(r'@\S+', '', text).strip()
 
-def is_id_in_summonees(y_author_id: str, y_summonees: list) -> bool:
+def id_in_summonees_exists(y_author_id: str, y_summonees: list) -> bool:
     """
     Check if y_author_id is present in the 'id' field of summonees.
 
