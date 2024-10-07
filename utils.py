@@ -676,6 +676,8 @@ def task_exists_in_list(g_tasks, task_id):
     return False
 
 def g_addressee_exists(addressees, addressee_id):
+    if not addressee_id:
+        return None
     for addressee in addressees:
         if addressee['User']['Id'] == addressee_id:
             return True

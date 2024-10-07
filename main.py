@@ -22,140 +22,206 @@ FEW_DATA            = False
 
 async def sync_comments(g_tasks, sync_mode: int, get_comments_execution: str = 'async'):
     """
-    Synchronizes comments between services.
-    sync_mode can be 1 or 2:
-    1 - sync all comments
-    2 - sync only comments for programmers
+    Synchronizes comments between Gandiva and Yandex tasks.
+    
+    sync_mode:
+        1 - Sync all comments
+        2 - Sync only comments for programmers
+    
     get_comments_execution (default is async):
-    sync - get all comments consecutively
-    async - get all comments concurrently
+        'sync' - Get comments consecutively
+        'async' - Get comments concurrently
     """
-    logging.info("Syncing comments...")
-    g_tasks_ids = utils.extract_task_ids(g_tasks)
-    g_task_comments = []
+    logging.info("Starting comment sync process...")
+
+    g_task_comments = await fetch_comments_for_tasks(g_tasks, get_comments_execution)
+
     added_comment_to_y_count = 0
     added_comment_to_g_count = 0
     edited_comment_in_y_count = 0
     edited_comment_in_g_count = 0
-    logging.info("Fetching comments...")
-    if get_comments_execution == 'async':
-        g_task_comments = await gapi.get_comments_for_tasks_concurrently(g_tasks_ids)
-    elif get_comments_execution == 'sync':
-        g_task_comments = await gapi.get_comments_for_tasks_consecutively(g_tasks_ids)
-    logging.info("Updating comments...")
-    
-    for g_task_id, g_comments in g_task_comments.items():
-        existing_g_comments, comment_texts_in_gandiva = utils.extract_existing_comments_from_gandiva(g_comments)
-        y_task = db.get_task_by_gandiva_id(session=DB_SESSION, g_task_id=g_task_id)
-        if y_task is None:
-            logging.warning(f"Task {g_task_id} was not found in database, skipping...")
+
+    # Iterate over the original g_tasks list directly
+    for g_task in g_tasks:
+        g_task_id = g_task['Id']
+        g_comments = g_task_comments.get(g_task_id, [])
+
+        if not g_comments:
+            logging.debug(f"No comments found in Gandiva task {g_task_id}.")
             continue
-        y_task_id = y_task.task_id_yandex
-        y_comments = await yapi.get_comments(y_task_id=y_task_id)
-        logging.debug(f"Syncing comments for task {g_task_id}...")
 
-        existing_comments_in_yandex = {}
-        comment_texts_in_yandex = {}
+        sync_result = await sync_task_comments(g_task, g_comments, sync_mode)
 
-        for y_comment in y_comments:
-            y_text          = y_comment.get('text', '')
-            y_comment_id    = y_comment.get('id')
-            y_summonees     = y_comment.get('summonees', ())
-            y_author_id     = None
-            if y_comment.get('createdBy') and y_comment.get('createdBy').get('id'):
-                y_author_id = y_comment.get('createdBy').get('id')
-            
-            # if comment's author is NOT YRobot and YRobot is mentioned (in summonees): DONE
-            # Add comment to gandiva, continue (we don't need to add it back to Yandex, duh) DONE
-            # Unique check: if y_comment_id is in gandiva comments already -> don't add
+        # Update counts based on results from sync_task_comments
+        added_comment_to_y_count += sync_result['added_to_yandex']
+        added_comment_to_g_count += sync_result['added_to_gandiva']
+        edited_comment_in_y_count += sync_result['edited_in_yandex']
+        edited_comment_in_g_count += sync_result['edited_in_gandiva']
 
-            # -> Gandiva section
-            if y_author_id:
-                if y_author_id != yapi.YA_ROBOT_ID and utils.is_id_in_summonees(yapi.YA_ROBOT_ID, y_summonees):
-                    y_author = y_comment.get('createdBy').get('display')
-                    y_text = utils.remove_mentions(y_text)
-                    y_text_html = utils.markdown_to_html(y_text)
-                    y_comment_id = str(y_comment_id)
-                    g_task = gapi.get_task_by_id_from_list(g_tasks, g_task_id)
-                    g_addressees = [g_task['Initiator']['Id'], g_task['Contractor']['Id']]
-                    if y_comment_id in existing_g_comments:
-                        g_comment_id = existing_g_comments.get(y_comment_id)
-                        g_text = comment_texts_in_gandiva.get(y_comment_id)
-                        if '<br>' in g_text:
-                            g_text = g_text.split('<br>', 1)[1]
-                        else:
-                            logging.warning(f"Yandex comment {y_comment_id} has no <br> in its html, skipping...")
-                            continue
-                        if g_text == y_text_html:
-                            logging.debug(f"Skipping comment {g_comment_id} as contents are the same.")
-                            continue
-                        
-                        response = await gapi.edit_comment(g_comment_id, y_comment_id, y_text_html, y_author, g_addressees)
-                        if response: edited_comment_in_g_count += 1
-                    else:
-                        response = await gapi.add_comment(g_task_id, y_text_html, y_comment_id, y_author, g_addressees)
-                        if response: added_comment_to_g_count += 1
-                    continue
-            else:
-                logging.error(f"No author found for Yandex comment {y_comment_id}")
+    log_sync_results(added_comment_to_y_count, added_comment_to_g_count, edited_comment_in_y_count, edited_comment_in_g_count)
+
+    return True
+
+async def fetch_comments_for_tasks(g_tasks, execution_mode: str):
+    """
+    Fetch comments for each task in the provided list.
+    Handles synchronous and asynchronous comment fetching modes.
+    """
+    logging.info("Fetching comments from Gandiva...")
+
+    # Extract task IDs directly from g_tasks
+    g_tasks_ids = [g_task['Id'] for g_task in g_tasks]
+
+    if execution_mode == 'async':
+        return await gapi.get_comments_for_tasks_concurrently(g_tasks_ids)
+    
+    return await gapi.get_comments_for_tasks_consecutively(g_tasks_ids)
+
+async def fetch_comments(g_tasks_ids, execution_mode: str):
+    """Fetch comments from Gandiva either asynchronously or synchronously."""
+    logging.info("Fetching comments from Gandiva...")
+    
+    if execution_mode == 'async':
+        return await gapi.get_comments_for_tasks_concurrently(g_tasks_ids)
+    
+    return await gapi.get_comments_for_tasks_consecutively(g_tasks_ids)
 
 
-            # Check if the comment contains a g_comment_id in the format [g_comment_id]
-            match = re.match(r'\[(\d+)\]', y_text)
-            if match:
-                g_comment_id = match.group(1)  # Extract the g_comment_id
-                existing_comments_in_yandex[g_comment_id] = y_comment_id  # Map y_comment_id to g_comment_id
-                comment_texts_in_yandex[g_comment_id] = y_text  # Map g_comment_id to y_text for comparison
+async def sync_task_comments(g_task, g_comments, sync_mode):
+    """
+    Sync comments for a single task between Gandiva and Yandex.
+    Returns a dictionary with counts of added and edited comments.
+    """
+    y_task = db.get_task_by_gandiva_id(session=DB_SESSION, g_task_id=g_task['Id'])
+    if not y_task:
+        logging.warning(f"Yandex task for Gandiva task {g_task['Id']} not found.")
+        return {'added_to_yandex': 0, 'added_to_gandiva': 0, 'edited_in_yandex': 0, 'edited_in_gandiva': 0}
+    
+    y_task_id = y_task.task_id_yandex
+    y_comments = await yapi.get_comments(y_task_id)
+    
+    g_task_contractor = g_task.get('Contractor', {}).get('Id')
+    existing_g_comments, g_comment_texts = utils.extract_existing_comments_from_gandiva(g_comments)
+    existing_y_comments, y_comment_texts = extract_yandex_comments(y_comments)
+    
+    added_to_yandex, edited_in_yandex = await sync_gandiva_comments_to_yandex(g_task, y_task_id, g_comments, existing_y_comments, y_comment_texts, g_task_contractor, sync_mode)
+    added_to_gandiva, edited_in_gandiva = await sync_yandex_comments_to_gandiva(g_task, y_comments, existing_g_comments, g_comment_texts)
+    
+    return {
+        'added_to_yandex': added_to_yandex,
+        'added_to_gandiva': added_to_gandiva,
+        'edited_in_yandex': edited_in_yandex,
+        'edited_in_gandiva': edited_in_gandiva
+    }
+
+
+async def sync_gandiva_comments_to_yandex(g_task, y_task_id, g_comments, existing_y_comments, y_comment_texts, g_task_contractor, sync_mode):
+    """Sync Gandiva comments to Yandex."""
+    added_to_yandex = 0
+    edited_in_yandex = 0
+    sync_programmers = 2
+    for g_comment in g_comments:
+        if utils.is_g_comment_author_this(g_comment, gapi.GAND_ROBOT_ID):
+            continue
         
-        # -> Yandex section
-        for g_comment in g_comments:
-            # Skip Robot's comments
-            if utils.is_g_comment_author_this(g_comment, gapi.GAND_ROBOT_ID): continue
+        if sync_mode == sync_programmers and not is_programmer_or_contractor_in_addressees(g_comment, g_task_contractor):
+            continue
+
+        g_comment_id = str(g_comment['Id'])
+        g_text = utils.html_to_yandex_format(g_comment['Text'])
+        author_name = get_author_name(g_comment['Author'])
+
+        if g_comment_id in existing_y_comments:
+            y_comment_id = existing_y_comments[g_comment_id]
+            y_text = y_comment_texts[g_comment_id].split('\n', 1)[1]
+
+            if y_text == g_text:
+                logging.debug(f"Skipping Yandex comment {g_comment_id} (content matches).")
+                continue
             
-            # Handle sync_mode 2 (only sync comments for programmers)
-            addressees      = g_comment.get('Addressees', [])
-            if sync_mode == 2 and not utils.g_addressee_exists(addressees, gapi.GAND_PROGRAMMER_ID): continue
-
-            # Extract required fields
-            g_comment_id    = str(g_comment['Id'])  # Ensure g_comment_id is a string
-            text_html       = g_comment['Text']
-            g_text          = utils.html_to_yandex_format(text_html)
-            author          = g_comment['Author']
-            author_name     = f"{author['FirstName']} {author['LastName']}"
-
-            
-            # Check if this g_comment_id already exists in Yandex comments
-            
-            if g_comment_id in existing_comments_in_yandex:
-                y_comment_id = existing_comments_in_yandex.get(g_comment_id)
-                y_text = comment_texts_in_yandex.get(g_comment_id)
-                y_text = y_text.split('\n', 1)[1]
-                # Only edit the comment if the contents are different
-                if y_text == g_text:
-                    logging.debug(f"Skipping comment {g_comment_id} as contents are the same.")
-                    continue
-                
-
-                response = await yapi.edit_comment(y_task_id, g_text, g_comment_id, y_comment_id, author_name)
-                if response:
-                    edited_comment_in_y_count += 1
-                    logging.info(f"Edited comment {g_comment_id} in Yandex task {y_task_id}!")
-                else:
-                    logging.error(f"Failed editing comment {g_comment_id} in Yandex task {y_task_id}.")
-            else:
-                # Send the comment to Yandex if sync_mode is not 2 or if GANDIVA_PROGRAMMER_ID is found
-                response = await yapi.add_comment(y_task_id, g_text, g_comment_id, author_name)
-                if isinstance(response, dict):
-                    added_comment_to_y_count += 1
-
-    # Log the total number of added and edited tasks
-    logging.info(f"Total comments added to Yandex: {added_comment_to_y_count}")
-    logging.info(f"Total comments edited in Yandex: {edited_comment_in_y_count}")
-    logging.info(f"Total comments added to Gandiva: {added_comment_to_g_count}")
-    logging.info(f"Total comments edited in Gandiva: {edited_comment_in_g_count}")
+            response = await yapi.edit_comment(y_task_id, g_text, g_comment_id, y_comment_id, author_name)
+            if isinstance(response, dict):
+                edited_in_yandex += 1
+        else:
+            response = await yapi.add_comment(y_task_id, g_text, g_comment_id, author_name)
+            if isinstance(response, dict):
+                added_to_yandex += 1
+    
+    return added_to_yandex, edited_in_yandex
 
 
+async def sync_yandex_comments_to_gandiva(g_task, y_comments, existing_g_comments, g_comment_texts):
+    """Sync Yandex comments to Gandiva."""
+    added_to_gandiva = 0
+    edited_in_gandiva = 0
 
+    for y_comment in y_comments:
+        y_author_id = y_comment.get('createdBy', {}).get('id')
+        if not y_author_id or y_author_id == yapi.YA_ROBOT_ID:
+            continue
+        
+        y_comment_id = str(y_comment.get('id'))
+        y_text_html = utils.markdown_to_html(utils.remove_mentions(y_comment.get('text', '')))
+        g_addressees = get_addressees_for_g_task(g_task)
+        
+        if y_comment_id in existing_g_comments:
+            g_comment_id = existing_g_comments.get(y_comment_id)
+            g_text = g_comment_texts.get(y_comment_id).split('<br>', 1)[1]
+
+            if g_text != y_text_html:
+                await gapi.edit_comment(g_comment_id, y_comment_id, y_text_html, y_comment.get('createdBy').get('display'), g_addressees)
+                edited_in_gandiva += 1
+        else:
+            await gapi.add_comment(g_task['Id'], y_text_html, y_comment_id, y_comment.get('createdBy').get('display'), g_addressees)
+            added_to_gandiva += 1
+    
+    return added_to_gandiva, edited_in_gandiva
+
+
+def extract_yandex_comments(y_comments):
+    """Extract and map Yandex comments to a dictionary for easy lookup."""
+    existing_comments = {}
+    comment_texts = {}
+
+    for y_comment in y_comments:
+        y_comment_id = str(y_comment.get('id'))
+        text = y_comment.get('text', '')
+        match = re.match(r'\[(\d+)\]', text)
+
+        if match:
+            g_comment_id = match.group(1)
+            existing_comments[g_comment_id] = y_comment_id
+            comment_texts[g_comment_id] = text
+
+    return existing_comments, comment_texts
+
+
+def get_author_name(author):
+    """Extract full name of the comment's author."""
+    return f"{author['FirstName']} {author['LastName']}"
+
+
+def get_addressees_for_g_task(g_task):
+    """Get addressees for Gandiva task."""
+    addressees = [g_task['Initiator']['Id']]
+    contractor_id = g_task.get('Contractor', {}).get('Id')
+    if contractor_id:
+        addressees.append(contractor_id)
+    return addressees
+
+
+def is_programmer_or_contractor_in_addressees(g_comment, contractor_id):
+    """Check if the programmer or contractor is in the addressees of the comment."""
+    addressees = g_comment.get('Addressees', [])
+    return utils.g_addressee_exists(addressees, gapi.GAND_PROGRAMMER_ID) or utils.g_addressee_exists(addressees, contractor_id)
+
+
+def log_sync_results(added_to_yandex, added_to_gandiva, edited_in_yandex, edited_in_gandiva):
+    """Log the results of the comment sync."""
+    logging.info(f"Comments added to Yandex: {added_to_yandex}")
+    logging.info(f"Comments added to Gandiva: {added_to_gandiva}")
+    logging.info(f"Comments edited in Yandex: {edited_in_yandex}")
+    logging.info(f"Comments edited in Gandiva: {edited_in_gandiva}")
 
 async def run_sync_services_periodically(queue: str, sync_mode: int, board_id: int, to_get_followers: bool = False,
                                          use_summaries: bool = False, interval_minutes: int = 30):
@@ -196,6 +262,15 @@ async def update_it_users_in_db(excel_obj):
     uids_y_g        = utils.map_it_uids_to_g_ids(it_uids, g_users)
     return db.add_or_update_user(session=DB_SESSION, user_data=uids_y_g)
 
+async def test(sync_mode):
+    err = True
+    stop = True
+    g_tasks_in_progress = await gapi.get_tasks(gapi.GroupsOfStatuses.in_progress)
+    res = await sync_comments(g_tasks_in_progress, sync_mode)
+    if res:
+        err = False
+    return res, err, stop
+
 
 # Main function to start the bot
 async def main():
@@ -217,6 +292,8 @@ async def main():
         queue = "TEA"
         board_id = 52
         interval_minutes = 5
+    # _, err, stop = await test(sync_mode)
+    # if stop: return
     await update_db(queue)
     # Start sync_services in the background and run every N minutes
     logging.info(f"Settings used in config:sync_mode: {sync_mode}; queue: {queue}; board_id: {board_id}; to_get_followers: {to_get_followers}; use_summaries: {use_summaries}; interval_minutes: {interval_minutes}")
@@ -227,7 +304,7 @@ async def update_db(queue):
     db.clean_department_names(DB_SESSION)
     logging.info('Checking updates in database (full check)...')
     await yapi.check_access_token(yapi.YA_ACCESS_TOKEN)
-    await gapi.get_access_token(gapi.GAND_LOGIN, gapi.GAND_PASSWORD)
+    # await gapi.get_access_token(gapi.GAND_LOGIN, gapi.GAND_PASSWORD)
     await update_tasks_in_db(queue = queue)
 
     await update_db_excel_data()
@@ -254,7 +331,7 @@ async def sync_services(queue: str, sync_mode: str, board_id: int, to_get_follow
     
     logging.info(f"Sync started!")
     await yapi.check_access_token(yapi.YA_ACCESS_TOKEN)
-    await gapi.get_access_token(gapi.GAND_LOGIN, gapi.GAND_PASSWORD)
+    # await gapi.get_access_token(gapi.GAND_LOGIN, gapi.GAND_PASSWORD)
 
     # Fetch tasks from both services
     g_tasks_all                     = await gapi.get_tasks(gapi.GroupsOfStatuses._all) # all
