@@ -46,36 +46,21 @@ The bot uses config.ini file to load sensitive and settings variables.
 touch config.ini
 ```
 
-#### Add the following variables to your `config.ini` file:
+#### Add the following variables to your `config.ini` file based on `config.ini.template` file:
 
 ```ini
-; Configuration file
+config.ini.template
+; Template of configuration file
 
 [Settings]
-sync_mode           = 1
-queue               = TEA
-board_id            = 52
+sync_mode           = 2
+queue               = QUEUE
+board_id            = 10
 interval_minutes    = 5
+to_get_followers    = False
+use_summaries       = False
 
-[Gandiva]
-login                   = your_login
-password                = your_password
-programmer_id           = your_programmer_id
-max_concurrent_requests = 10
-
-[Yandex]
-x_cloud_org_id  = your_x_cloud_org_id
-oauth_token     = your_oauth_token
-client_id       = your_client_id
-client_secret   = your_client_secret
-
-[Database]
-url = sqlite:///project.db
-
-[YandexCustomFieldIds]
-gandiva                 = your_gandiva_field_id
-initiator               = your_initiator_field_id
-initiator_department    = your_initiator_department_field_id
+...
 ```
 
 ### 5. Run the bot
