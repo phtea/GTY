@@ -1,0 +1,36 @@
+; Template of configuration file
+
+[Settings]
+sync_mode           = 2
+queue               = QUEUE
+board_id            = 10
+interval_minutes    = 5
+to_get_followers    = False
+use_summaries       = False
+
+[Gandiva]
+login                   = your_login
+password                = your_password
+programmer_id           = 1234
+max_concurrent_requests = 10
+robot_id                = 123
+
+[Yandex]
+x_cloud_org_id  = your_cloud_org_id
+oauth_token     = your_oauth_token
+disk_oauth_token= your_disk_oauth_token
+path_to_excel   = GTY/GTY_table.xlsx
+client_id       = your_client_id
+client_secret   = your_client_secret
+robot_id        = 123456789012345
+
+[YandexCustomFieldIds]
+gandiva                 = randomindentifier4313223--Gandiva
+initiator               = randomindentifier4313223--Initiator
+initiator_department    = randomindentifier4313223--InitiatorDepartment
+analyst                 = randomindentifier4313223--Analyst
+gandiva_task_id         = randomindentifier4313223--GandivaTaskId
+nd			            = randomindentifier4313223--ND
+
+[Database]
+url = sqlite:///project.db
