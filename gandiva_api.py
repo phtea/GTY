@@ -24,10 +24,7 @@ GAND_PASSWORD           = config.get('Gandiva', 'password')
 GAND_PROGRAMMER_ID      = config.getint('Gandiva', 'programmer_id')
 GAND_ROBOT_ID           = config.getint('Gandiva', 'robot_id')
 MAX_CONCURRENT_REQUESTS = config.getint('Gandiva', 'max_concurrent_requests')
-DB_URL                  = config.get('Database', 'url')
 WAITING_ANALYST_ID      = 1018
-DB_ENGINE               = db.create_database(DB_URL)
-DB_SESSION              = db.get_session(DB_ENGINE)
 
 class GroupsOfStatuses:
     in_progress             = [3, 4, 6, 8, 13]
@@ -529,14 +526,15 @@ async def handle_waiting_for_analyst_or_no_contractor_no_required_start_date(g_t
     if not g_task_anomalies:
         logging.info(f"No anomalies found!")
         return True
+    db_session = db.get_db_session()
     count = 0
     for g_task_anomaly in g_task_anomalies:
         g_task_id               = g_task_anomaly['Id']
         last_modified_date      = g_task_anomaly['LastModifiedDate']
         initiator_id            = g_task_anomaly.get('Initiator', {}).get('Id')
         department              = await get_department_by_user_id(initiator_id)
-        y_analyst               = db.get_user_id_by_department(session=DB_SESSION, department_name=department)
-        user                    = db.get_user_by_yandex_id(DB_SESSION, y_analyst)
+        y_analyst               = db.get_user_id_by_department(session=db_session, department_name=department)
+        user                    = db.get_user_by_yandex_id(db_session, y_analyst)
         g_analyst_id            = None
         if user: g_analyst_id   = user.gandiva_user_id
         res_contractor          = None

@@ -31,8 +31,6 @@ DB_URL                              = config.get('Database', 'url')
 YA_REFRESH_TOKEN                    = ''
 YA_DISK_ACCESS_TOKEN                = config.get('Yandex', 'disk_oauth_token')
 GANDIVA_TASK_URL                    = 'https://gandiva.s-stroy.ru/Request/Edit/'
-DB_ENGINE                           = db.create_database(DB_URL)
-DB_SESSION                          = db.get_session(DB_ENGINE)
 
 # Handle not enough data in .env
 if not (YA_X_CLOUD_ORG_ID and YA_ACCESS_TOKEN and YA_CLIENT_ID and YA_CLIENT_SECRET):
@@ -176,8 +174,11 @@ async def g_to_y_fields(g_task: dict, edit: bool, to_get_followers: bool = False
     initiator_department    = await gandiva_api.get_department_by_user_id(g_user_id=initiator_id)
     nd                      = None
     g_task_detailed         = None
+    
+    db_session              = None
     if initiator_department:
-        nd = db.get_nd_by_department_name(session=DB_SESSION, department_name=initiator_department)
+        db_session = db.get_db_session()
+        nd = db.get_nd_by_department_name(session=db_session, department_name=initiator_department)
     
     # Add assignee if exists
     g_assignee        = g_task.get('Contractor')
@@ -186,7 +187,9 @@ async def g_to_y_fields(g_task: dict, edit: bool, to_get_followers: bool = False
         g_assignee_id = g_assignee.get('Id')
     y_assignee_id = None
     if g_assignee_id:
-        assignee = db.get_user_by_gandiva_id(session=DB_SESSION, g_user_id=g_assignee_id)
+        if db_session is None:
+            db_session = db.get_db_session()
+        assignee = db.get_user_by_gandiva_id(session=db_session, g_user_id=g_assignee_id)
         y_assignee_id = assignee.yandex_user_id if assignee else None
 
     # Convert dates if they exist
@@ -214,7 +217,9 @@ async def g_to_y_fields(g_task: dict, edit: bool, to_get_followers: bool = False
     if to_get_followers:
         if not g_task_detailed: g_task_detailed = await gandiva_api.get_task(g_task_id)
         observers = utils.extract_observers_from_detailed_task(g_task_detailed)
-        followers = db.convert_gandiva_observers_to_yandex_followers(session=DB_SESSION, gandiva_observers=observers)
+        if db_session is None:
+            db_session = db.get_db_session()
+        followers = db.convert_gandiva_observers_to_yandex_followers(session=db_session, gandiva_observers=observers)
 
     # Fields that are specific to the "edit" operation
     return {
@@ -431,8 +436,8 @@ async def add_task(g_task_id, initiator_name, queue,
                    task_type=None, initiator_department=None, start=None, nd=None, y_step=None):
 
     g_task_id = str(g_task_id)
-
-    task_in_db = db.get_task_by_gandiva_id(DB_SESSION, g_task_id=g_task_id)
+    db_session = db.get_db_session()
+    task_in_db = db.get_task_by_gandiva_id(db_session, g_task_id=g_task_id)
     if task_in_db:
         return task_in_db
 
@@ -455,7 +460,9 @@ async def add_task(g_task_id, initiator_name, queue,
     if task_type: body["type"] = task_type
     if initiator_department:
         body[YA_FIELD_ID_INITIATOR_DEPARTMENT] = initiator_department
-        analyst = db.get_user_id_by_department(session=DB_SESSION, department_name=initiator_department)
+        if db_session is None:
+            db_session = db.get_db_session()
+        analyst = db.get_user_id_by_department(session=db_session, department_name=initiator_department)
         if analyst: body[YA_FIELD_ID_ANALYST] = analyst
     if y_step in [0,1,2]: body["assignee"] = analyst
     if nd: body[YA_FIELD_ID_ND] = nd
@@ -475,7 +482,9 @@ async def add_task(g_task_id, initiator_name, queue,
         task_id_yandex = response.get('key')
         if task_id_yandex:
             # Add task to the database
-            db.add_or_update_task(session=DB_SESSION, g_task_id=g_task_id, y_task_id=task_id_yandex)
+            if db_session is None:
+                db_session = db.get_db_session()
+            db.add_or_update_task(session=db_session, g_task_id=g_task_id, y_task_id=task_id_yandex)
             return response
         else:
             logging.error(f"Failed to retrieve task key from response for task {g_task_id}")
@@ -498,7 +507,8 @@ async def add_tasks(g_tasks: list[dict], queue: str, non_closed_ya_task_ids: dic
         g_task_id = str(g_task['Id'])
         if g_task_id in non_closed_ya_task_ids.keys():
             logging.debug(f"Task {g_task_id} already exists.")
-            db.add_or_update_task(session=DB_SESSION, g_task_id=g_task_id, y_task_id=non_closed_ya_task_ids[g_task_id])
+            db_session = db.get_db_session()
+            db.add_or_update_task(session=db_session, g_task_id=g_task_id, y_task_id=non_closed_ya_task_ids[g_task_id])
             continue
 
         fields = await g_to_y_fields(g_task, edit=False)
@@ -593,7 +603,8 @@ async def update_task_if_needed(y_task, g_task_id, initiator_name, initiator_dep
 
     # Check for analyst by department
     if initiator_department:
-        analyst = db.get_user_id_by_department(session=DB_SESSION, department_name=initiator_department)
+        db_session = db.get_db_session()
+        analyst = db.get_user_id_by_department(session=db_session, department_name=initiator_department)
         if analyst:
             cur_y_analyst = y_task.get(YA_FIELD_ID_ANALYST, {}).get('id')
             if utils.EXCEL_UPDATED_IN_YANDEX_DISK:
@@ -700,7 +711,8 @@ async def edit_tasks(g_tasks, y_tasks, to_get_followers, use_summaries=False, ed
         if await update_task_if_needed(y_task, g_task_id, initiator_name, initiator_department, description, y_start_date, y_assignee_id, followers, nd, y_step, g_contractor_id):
             edited_task_count += 1
             y_task_id = y_task['key']
-            db.add_or_update_task(session=DB_SESSION, g_task_id=g_task_id, y_task_id=y_task_id)
+            db_session = db.get_db_session()
+            db.add_or_update_task(session=db_session, g_task_id=g_task_id, y_task_id=y_task_id)
 
     # Log the total number of edited tasks
     logging.info(f"Total tasks edited: {edited_task_count}")
@@ -858,7 +870,8 @@ def filter_tasks_with_unique(y_tasks):
 async def add_existing_tracker_tasks_to_db():
     res = await get_tasks()
     res = filter_tasks_with_gandiva_task_id(res)
-    db.add_tasks(session=DB_SESSION, y_tasks=res)
+    db_session = db.get_db_session()
+    db.add_tasks(session=db_session, y_tasks=res)
 
 async def get_sprints_on_board(board_id: str) -> dict:
     """Returns sprints (as a dictionary) for the given board."""
@@ -1056,7 +1069,8 @@ def group_tasks_by_status(g_tasks: list, y_tasks: list, to_filter: bool = True) 
         waiting_analyst_id = gandiva_api.WAITING_ANALYST_ID
         if current_g_status_step == 3 and g_task.get('Contractor') and g_task.get('Contractor').get('Id'):
             contr = g_task.get('Contractor').get('Id')
-            if contr == waiting_analyst_id or not db.get_user_by_gandiva_id(session=DB_SESSION, g_user_id=contr) and contr not in users_to_skip:
+            db_session = db.get_db_session()
+            if contr == waiting_analyst_id or not db.get_user_by_gandiva_id(session=db_session, g_user_id=contr) and contr not in users_to_skip:
                 current_g_status_step = 2
                 current_g_status = utils.y_step_to_status(current_g_status_step)
         # Step 5: Apply filtering logic if required
@@ -1081,7 +1095,8 @@ async def handle_in_work_but_waiting_for_analyst(g_tasks: list[dict], y_tasks: l
         y_step      = utils.y_status_to_step(y_status)
         if y_step == 3 and g_task.get('Contractor') and g_task.get('Contractor').get('Id'):
             contr = g_task.get('Contractor').get('Id')
-            if contr == gandiva_api.WAITING_ANALYST_ID or not db.get_user_by_gandiva_id(session=DB_SESSION, g_user_id=contr) and contr not in users_to_skip:
+            db_session = db.get_db_session()
+            if contr == gandiva_api.WAITING_ANALYST_ID or not db.get_user_by_gandiva_id(session=db_session, g_user_id=contr) and contr not in users_to_skip:
                 cursed_g_tasks.append(g_task)
 
     cursed_g_task_ids = utils.extract_task_ids(cursed_g_tasks)

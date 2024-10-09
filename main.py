@@ -12,16 +12,12 @@ config = configparser.ConfigParser()
 config.read(CONFIG_PATH)
 
 # Globals
-DB_URL              = config.get('Database', 'url')
 PATH_TO_EXCEL       = config.get('Yandex', 'path_to_excel')
-# Create the database and tables
-DB_ENGINE           = db.create_database(DB_URL)
-DB_SESSION          = db.get_session(DB_ENGINE)
 MAX_COMMENT_LENGTH  = 20_000
 
-# To test work on few tasks (for careful testing)
+# Debug globabs
 FEW_DATA            = False
-TEST_FUNC           = True
+TEST_FUNC           = False
 
 
 async def sync_comments(g_tasks, sync_mode: int, get_comments_execution: str = 'async'):
@@ -84,7 +80,8 @@ async def sync_task_comments(g_task, g_comments, sync_mode):
     Sync comments for a single task between Gandiva and Yandex.
     Returns a dictionary with counts of added and edited comments.
     """
-    y_task = db.get_task_by_gandiva_id(session=DB_SESSION, g_task_id=g_task['Id'])
+    db_session = db.get_db_session()
+    y_task = db.get_task_by_gandiva_id(session=db_session, g_task_id=g_task['Id'])
     if not y_task:
         logging.warning(f"Yandex task for Gandiva task {g_task['Id']} not found.")
         return {'added_to_yandex': 0, 'added_to_gandiva': 0, 'edited_in_yandex': 0, 'edited_in_gandiva': 0}
@@ -183,7 +180,7 @@ async def sync_yandex_comments_to_gandiva(g_task, y_comments, existing_g_comment
         y_text = y_comment.get('text', '')
         if len(y_text) > MAX_COMMENT_LENGTH: continue
 
-        y_text_html = utils.markdown_to_html(utils.remove_mentions())
+        y_text_html = utils.markdown_to_html(utils.remove_mentions(y_text))
         g_addressees = get_addressees_for_g_task(g_task)
         y_comment_author = y_comment.get('createdBy', {}).get('display')
 
@@ -271,7 +268,8 @@ async def run_sync_services_periodically(queue: str, sync_mode: int, board_id: i
 
 async def update_tasks_in_db(queue: str):
     y_tasks = await yapi.get_tasks(query=yapi.get_query_in_progress(queue))
-    db.add_tasks(session=DB_SESSION, y_tasks=y_tasks)
+    db_session = db.get_db_session()
+    db.add_tasks(session=db_session, y_tasks=y_tasks)
 
 async def update_users_department_in_db(excel_obj):
     # department_analyst_dict = utils.extract_department_analysts('department_analyst_nd.csv')
@@ -279,7 +277,8 @@ async def update_users_department_in_db(excel_obj):
     department_analyst_dict = utils.extract_department_analysts_from_excel(excel_obj)
     users                   = await yapi.get_all_users()
     department_user_nd_mapping = utils.map_department_nd_to_user_id(department_analyst_dict, users)
-    return db.add_user_department_nd_mapping(session=DB_SESSION, department_user_mapping=department_user_nd_mapping)
+    db_session = db.get_db_session()
+    return db.add_user_department_nd_mapping(session=db_session, department_user_mapping=department_user_nd_mapping)
 
 async def update_it_users_in_db(excel_obj):
     
@@ -290,7 +289,9 @@ async def update_it_users_in_db(excel_obj):
     g_tasks         = await gapi.get_tasks(gapi.GroupsOfStatuses.in_progress)
     g_users         = utils.extract_unique_gandiva_users(g_tasks)
     uids_y_g        = utils.map_it_uids_to_g_ids(it_uids, g_users)
-    return db.add_or_update_user(session=DB_SESSION, user_data=uids_y_g)
+
+    db_session = db.get_db_session()
+    return db.add_or_update_user(session=db_session, user_data=uids_y_g)
 
 async def test():
     sync_mode = 2
@@ -319,39 +320,44 @@ async def main():
     logging.info("-------------------- APPLICATION STARTED --------------------")
 
     try:
-        sync_mode = config.getint('Settings', 'sync_mode')
-        to_get_followers = config.getboolean('Settings', 'to_get_followers')
-        use_summaries = config.getboolean('Settings', 'use_summaries')
-        queue = config.get('Settings', 'queue')
-        board_id = config.getint('Settings', 'board_id')
-        interval_minutes = config.getint('Settings', 'interval_minutes')
+        sync_mode           = config.getint('Settings', 'sync_mode')
+        to_get_followers    = config.getboolean('Settings', 'to_get_followers')
+        use_summaries       = config.getboolean('Settings', 'use_summaries')
+        queue               = config.get('Settings', 'queue')
+        board_id            = config.getint('Settings', 'board_id')
+        interval_minutes    = config.getint('Settings', 'interval_minutes')
+        db_url              = config.get('Database', 'url')
     except Exception as e:  # Catch any exception
         logging.warning(f"Error fetching config values: {e}. Using default values.")
-        use_summaries = False
-        to_get_followers = False
-        sync_mode = 1
-        queue = "TEA"
-        board_id = 52
-        interval_minutes = 5
+        use_summaries       = False
+        to_get_followers    = False
+        sync_mode           = 1
+        queue               = "TEA"
+        board_id            = 52
+        interval_minutes    = 5
+        db_url              = 'sqlite:///project.db'
     if TEST_FUNC:
         _, err, stop = await test()
         if stop: return
-
+    db_init(db_url)
     await update_db(queue)
     # Start sync_services in the background and run every N minutes
     logging.info(f"Settings used in config:sync_mode: {sync_mode}; queue: {queue}; board_id: {board_id}; to_get_followers: {to_get_followers}; use_summaries: {use_summaries}; interval_minutes: {interval_minutes}")
     await run_sync_services_periodically(queue, sync_mode, board_id, to_get_followers, use_summaries=use_summaries, interval_minutes=interval_minutes)
 
+def db_init(db_url):
+    db.set_db_url(db_url)
+
 async def update_db(queue):
-    # db.update_database_schema(DB_ENGINE)
-    db.clean_department_names(DB_SESSION)
+    db_session = db.get_db_session()
+    db.clean_department_names(db_session)
     logging.info('Checking updates in database (full check)...')
     await yapi.check_access_token(yapi.YA_ACCESS_TOKEN)
     # await gapi.get_access_token(gapi.GAND_LOGIN, gapi.GAND_PASSWORD)
     await update_tasks_in_db(queue = queue)
 
     await update_db_excel_data()
-    db.find_duplicate_gandiva_tasks(DB_SESSION)
+    db.find_duplicate_gandiva_tasks(db_session)
 
 async def update_db_excel_data():
     logging.info('Checking updates in database (Excel data)...')
