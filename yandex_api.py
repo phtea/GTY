@@ -90,18 +90,18 @@ async def refresh_access_token(refresh_token=None) -> dict:
     # Use make_http_request to send the POST request
     response = await make_http_request("POST", YA_OAUTH_TOKEN_URL, headers=headers, body=payload_url_encoded)
 
-    if response:
-        access_token = response.get('access_token')
-        refresh_token = response.get('refresh_token')
-
-        global YA_ACCESS_TOKEN
-        YA_ACCESS_TOKEN = access_token
-        YA_REFRESH_TOKEN = refresh_token
-
-        return access_token
-    else:
+    if not response:
         logging.error("Failed to refresh access token.")
         return None
+
+    access_token = response.get('access_token')
+    refresh_token = response.get('refresh_token')
+
+    global YA_ACCESS_TOKEN
+    YA_ACCESS_TOKEN = access_token
+    YA_REFRESH_TOKEN = refresh_token
+
+    return access_token
 
 async def check_access_token(access_token) -> str:
     """
@@ -235,26 +235,17 @@ async def get_account_info(access_token):
     """
     Gets Yandex account info by providing the access_token.
     """
-    # Prepare the request parameters
     data = {
         "oauth_token": access_token,
         "format": "json",
     }
     
-    # Make the HTTP POST request
     response = await make_http_request('POST', YA_INFO_TOKEN_URL, headers=HEADERS, body=json.dumps(data))
+    return response
 
-    return response  # Return the response object
-
-async def get_page_of_tasks(queue: str = None,
-                            keys: str | list[str] = None,
-                            filter: dict = None,
-                            query: str = None,
-                            order: str = None,
-                            expand: str = None,
-                            login: str = None,
-                            page_number: int = 1,
-                            per_page: int = 5000) -> dict:
+async def get_page_of_tasks(queue: str = None, keys: str | list[str] = None, filter: dict = None,
+                            query: str = None, order: str = None, expand: str = None,
+                            login: str = None, page_number: int = 1, per_page: int = 5000) -> dict:
     # Initialize the request body
     body = {}
 
@@ -400,15 +391,13 @@ async def get_page_of_users(page: int = 1, per_page: int = 100):
 
     url = f"{HOST}/v2/users?perPage={per_page}&page={page}"
     
-    # Use the helper function to make the HTTP request
     response = await make_http_request("GET", url, headers=HEADERS)
     
-    # Check if the response is successful
-    if response:
-        return response  # Return the JSON response
-    else:
+    if not response:
         logging.error(f"Failed to get users.")
         return None
+    
+    return response
 
 async def get_all_users(per_page: int = 100) -> list:
     """
@@ -430,24 +419,19 @@ async def get_task(y_task_id: str) -> dict:
 
     url = f"{HOST}/v2/issues/{y_task_id}"
     
-    # Use the helper function to make the HTTP request
     response = await make_http_request("GET", url, headers=HEADERS)
     
-    # Check if the response is successful
-    if response:
-        return response  # Return the JSON response
-    else:
+    if not response:
         logging.error(f"Failed to get task {y_task_id}.")
         return None
+    return response
 
 async def add_task(g_task_id, initiator_name, queue,
                    description="Без описания", y_assignee=None,
                    task_type=None, initiator_department=None, start=None, nd=None, y_step=None):
 
-    # Convert the task ID to a string
     g_task_id = str(g_task_id)
 
-    # Check if the task is already in the database
     task_in_db = db.get_task_by_gandiva_id(DB_SESSION, g_task_id=g_task_id)
     if task_in_db:
         return task_in_db
@@ -624,28 +608,27 @@ async def update_task_if_needed(y_task, g_task_id, initiator_name, initiator_dep
                 edit_fields['edit_assignee_yandex_id'] = analyst
 
 
-    # If any field needs to be edited, call the edit function
-    if any(edit_fields.values()):
-        response_json = await edit_task(
-            y_task_id           =y_task_id,
-            initiator_name      =edit_fields['edit_initiator_name'],
-            initiator_department=edit_fields['edit_initiator_department'],
-            description         =edit_fields['edit_description'],
-            start               =edit_fields['edit_yandex_start_date'],
-            analyst             =edit_fields['edit_analyst'],
-            y_assignee_id       =edit_fields['edit_assignee_yandex_id'],
-            followers           =edit_fields['edit_followers'],
-            g_task_id           =edit_fields['edit_gandiva_task_id'],
-            gandiva             =edit_fields['edit_gandiva'],
-            nd                  =edit_fields['edit_nd'])
-        if response_json:
-             # Return True to indicate the task was edited
-            return True
-        else:
-            return False
-    else:
+    if not any(edit_fields.values()):
         logging.debug(f"Task {g_task_id} is already up-to-date.")
         return False
+    
+    response_json = await edit_task(
+        y_task_id           =y_task_id,
+        initiator_name      =edit_fields['edit_initiator_name'],
+        initiator_department=edit_fields['edit_initiator_department'],
+        description         =edit_fields['edit_description'],
+        start               =edit_fields['edit_yandex_start_date'],
+        analyst             =edit_fields['edit_analyst'],
+        y_assignee_id       =edit_fields['edit_assignee_yandex_id'],
+        followers           =edit_fields['edit_followers'],
+        g_task_id           =edit_fields['edit_gandiva_task_id'],
+        gandiva             =edit_fields['edit_gandiva'],
+        nd                  =edit_fields['edit_nd'])
+    
+    if not response_json:
+        return False
+    
+    return True
 
 def create_y_tasks_dict(y_tasks, use_summaries):
     """
@@ -659,20 +642,18 @@ def create_y_tasks_dict(y_tasks, use_summaries):
     """
     y_tasks_dict = {}
 
-    if use_summaries:
-        # Map based on task IDs extracted from summaries
-        for task in y_tasks:
-            summary = task.get('summary', '')
-            # ya_task_key = task.get('key')  # Extract the 'key' field
-            
-            # Use regex to extract the task ID at the start of the summary
-            match = re.match(r'^(\d+)', summary)
-            if match:
-                task_id = match.group(1)  # Get the matched task ID
-                y_tasks_dict[task_id] = task  # Map task_id to task object
-    else:
-        # Map based on YA_FIELD_ID_GANDIVA_TASK_ID
+    if not use_summaries:
         y_tasks_dict = {yt[YA_FIELD_ID_GANDIVA_TASK_ID]: yt for yt in y_tasks if yt.get(YA_FIELD_ID_GANDIVA_TASK_ID)}
+        return y_tasks_dict
+        # Map based on task IDs extracted from summaries
+    
+    for task in y_tasks:
+        summary = task.get('summary', '')
+        
+        match = re.match(r'^(\d+)', summary)
+        if match:
+            task_id = match.group(1)  # Get the matched task ID
+            y_tasks_dict[task_id] = task  # Map task_id to task object
 
     return y_tasks_dict
 
@@ -773,12 +754,12 @@ async def edit_task(y_task_id, summary=None, description=None,y_assignee_id=None
 
     # Use the helper function to make the PATCH request
     response = await make_http_request('PATCH', url, headers=HEADERS, body=body_json)
-    if response:
-        logging.info(f"Successfully edited task {y_task_id}")
-        return response
-    else:
+    if not response:
         logging.error(f"Failed editing task {y_task_id}")
         return None
+
+    logging.info(f"Successfully edited task {y_task_id}")
+    return response
 
 async def move_task_status(y_task_id, transition_id,
                         comment="", resolution="fixed"):
@@ -821,12 +802,12 @@ async def move_tasks_status(y_tasks, new_status):
     response =  await make_http_request('POST', url, headers=HEADERS, body=json.dumps(body))
 
     # Return the response JSON or None if the request failed
-    if response:
-        logging.info(f"Tasks were moved to new status {new_status}: {len(task_keys)}")
-        return response
-    else:
+    if not response:
         logging.error(f"Tasks were not moved to new status {new_status}")
         return None
+
+    logging.info(f"Tasks were moved to new status {new_status}: {len(task_keys)}")
+    return response
 
 async def move_status_task_groups(grouped_y_tasks: dict):
     """Processes grouped Yandex tasks by calling move_group_of_tasks_status for each group asynchronously."""
@@ -855,18 +836,16 @@ async def batch_edit_tasks(values: dict, task_ids: list):
         "values": values
     }
 
-    # Construct the URL for the bulk update
     url = f"{HOST}/v2/bulkchange/_update"
 
-    # Use the helper function to make the HTTP request
     response = await make_http_request("POST", url, headers=HEADERS, body=json.dumps(body))
 
-    if response:
-        logging.info("Bulk change successful")
-        return response  # Return the JSON response
-    else:
+    if not response:
         logging.error("Failed to perform bulk change.")
         return None
+
+    logging.info("Bulk change successful")
+    return response
 
 def filter_tasks_with_gandiva_task_id(y_tasks):
     """Filters and returns only the tasks that contain the YA_FIELD_ID_GANDIVA_TASK_ID key."""
@@ -900,11 +879,12 @@ async def create_sprint(board_id: str, name: str, start_date: str, end_date: str
     "endDate": end_date
     }
     body_json = json.dumps(body)
-    res = await make_http_request('POST', url, headers=HEADERS, body=body_json)
-    if res:
-        logging.info(f"Sprint '{name}' [{start_date} - {end_date}] was successfully created.")
-    else:
+    response = await make_http_request('POST', url, headers=HEADERS, body=body_json)
+    if not response:
         logging.error(f"Failed to create new sprint.")
+        return
+    
+    logging.info(f"Sprint '{name}' [{start_date} - {end_date}] was successfully created.")
 
 async def create_weekly_release_sprint(board_id: int, day_of_the_week: int = 3, sprint_length_days: int = 8):
     """Creates a sprint starting on Thursday and ending on the next Thursday with the name 'Релиз [End Date]'.
@@ -988,45 +968,46 @@ async def get_comments(y_task_id: str, per_page: int = 100) -> list:
 async def add_comment(y_task_id: str, comment: str, g_comment_id: str = None, author_name: str = None):
     url = f"{HOST}/v2/issues/{y_task_id}/comments"
     
-    # Format the comment according to the specified template
-    if g_comment_id and author_name:
-        comment = f"[{g_comment_id}] {author_name}:\n{comment}"
-    else:
-        comment = f"{comment}"  # In case g_comment_id or author_name are None, keep the original comment
+    comment = format_g_comment_to_y(comment, g_comment_id, author_name)
 
     body = {
         "text": comment
     }
-    # Convert the body to a JSON string
+
     body_json = json.dumps(body)
     response = await make_http_request("POST", url=url, headers=HEADERS, body=body_json)
-        # Return the response JSON or None if the request failed
-    if response:
-        logging.debug(f"Comment was successfully added to task {y_task_id}!")
-        return response
-    else:
+
+    if not response:
         logging.error(f"Comment was not added to task {y_task_id}.")
         return None
+
+    logging.debug(f"Comment was successfully added to task {y_task_id}!")
+    return response
+
+def format_g_comment_to_y(comment, g_comment_id, author_name):
+    if g_comment_id and author_name:
+        comment = f"[{g_comment_id}] {author_name}:\n{comment}"
+        return comment
+    return comment
 
 async def edit_comment(y_task_id: str, comment: str, g_comment_id: str = None, y_comment_id: str = None, author_name: str = None):
     url = f"{HOST}/v2/issues/{y_task_id}/comments/{y_comment_id}"
     
-    # Format the comment according to the specified template
     if g_comment_id and author_name:
         comment = f"[{g_comment_id}] {author_name}:\n{comment}"
 
     body = {
         "text": comment
     }
-    # Convert the body to a JSON string
+
     response = await make_http_request("PATCH", url=url, headers=HEADERS, body=json.dumps(body))
-        # Return the response JSON or None if the request failed
-    if response:
-        logging.debug(f"Comment was successfully edited in task {y_task_id}!")
-        return response
-    else:
+
+    if not response:
         logging.error(f"Comment was not edited in task {y_task_id}.")
         return None
+
+    logging.debug(f"Comment was successfully edited in task {y_task_id}!")
+    return response
 
 async def remove_followers_in_tasks(y_task_ids: list[str], followers: list[str]):
     url = f"{HOST}/v2/bulkchange/_update"
@@ -1102,7 +1083,7 @@ async def handle_in_work_but_waiting_for_analyst(g_tasks: list[dict], y_tasks: l
             contr = g_task.get('Contractor').get('Id')
             if contr == gandiva_api.WAITING_ANALYST_ID or not db.get_user_by_gandiva_id(session=DB_SESSION, g_user_id=contr) and contr not in users_to_skip:
                 cursed_g_tasks.append(g_task)
-    # return
+
     cursed_g_task_ids = utils.extract_task_ids(cursed_g_tasks)
     cursed_g_task_ids = list(map(str, cursed_g_task_ids))
     if not cursed_g_tasks:
@@ -1125,10 +1106,9 @@ async def handle_in_work_but_waiting_for_analyst(g_tasks: list[dict], y_tasks: l
     res = await move_tasks_status(cursed_y_tasks, needed_status)
     if res:
         logging.info(f"Handled {len(cursed_y_tasks)} anomaly tasks!")
-    if len(cursed_y_tasks) > 0:
-        return True
-    else:
+    if len(cursed_y_tasks) == 0:
         return False
+    return True
 
 async def handle_cancelled_tasks_still_have_g_task_ids(queue):
     count = 0
@@ -1139,17 +1119,16 @@ async def handle_cancelled_tasks_still_have_g_task_ids(queue):
     for y_task in y_tasks:
         y_task_id = y_task.get('key')
         res = await edit_task(y_task_id, g_task_id='')
-        if res:
-            logging.info(f"Removed GandivaTaskId from cancelled task {y_task_id}!")
-            count += 1
-        else:
+        if not res:
             logging.error(f"Failed removing GandivaTaskId from cancelled task {y_task_id}.")
+        logging.info(f"Removed GandivaTaskId from cancelled task {y_task_id}!")
+        count += 1
 
-    if count:
-        logging.info(f"Handled {count} cancelled tasks (removed g_task_id from them)!")
-        return True
-    else:
+    if not count:
         return False
+
+    logging.info(f"Handled {count} cancelled tasks (removed g_task_id from them)!")
+    return True
 
 async def download_file_from_yandex_disk(path):
     # GTY/GTY_table.xlsx
@@ -1161,12 +1140,3 @@ async def download_file_from_yandex_disk(path):
     file_url = file_dict.get('href')
     file = await make_http_request(method='GET', url=file_url, headers=HEADERS_DISK)
     return file
-
-async def main():
-    path = 'GTY/GTY_table.xlsx'
-    excel_bytes = await download_file_from_yandex_disk(path='GTY/GTY_table.xlsx')
-    excel_object= utils.read_excel_from_bytes(excel_bytes)
-    pass
-
-if __name__ == '__main__':
-    asyncio.run(main())

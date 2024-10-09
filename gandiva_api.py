@@ -267,18 +267,13 @@ async def get_task_comments(g_task_id):
 
     url = f"{HOST}/api/Requests/{g_task_id}/Comments"
     
-    response = await make_http_request(
-        method="GET", 
-        url=url, 
-        headers=get_headers()
-    )
+    response = await make_http_request(method="GET", url=url, headers=get_headers())
 
-    if response or response == []:
-        logging.debug(f"Found {len(response)} comments for task {g_task_id}.")
-        return response
-    else:
+    if response is None:
         logging.error(f"Failed to fetch comments for task {g_task_id}")
         return None
+    logging.debug(f"Found {len(response)} comments for task {g_task_id}.")
+    return response
 
 def get_task_by_id_from_list(task_list, task_id):
     """
@@ -331,6 +326,10 @@ async def get_comments_for_tasks_consecutively(g_task_ids: list[int]):
 
     return task_comments
 
+def get_comments_generator(execution_mode: str = 'async'):
+    if execution_mode == 'async':
+        return get_comments_for_tasks_concurrently
+    return get_comments_for_tasks_consecutively
 
 @token_refresh_decorator
 async def get_tasks(statutes: list[int] = [3, 4, 6, 8, 10, 11]):
@@ -523,10 +522,6 @@ async def handle_tasks_in_work_but_waiting_for_analyst(needed_date):
         task_id = needed_task.get('Id')
         await edit_task_required_start_date(task_id, last_modified_date, required_start_date=needed_date)
 
-import time # using for timing functions
-async def main():
-    pass
-
 @token_refresh_decorator
 async def handle_waiting_for_analyst_or_no_contractor_no_required_start_date(g_tasks):
     next_year = utils.get_next_year_datetime()
@@ -574,6 +569,3 @@ async def handle_waiting_for_analyst_or_no_contractor_no_required_start_date(g_t
         return True
     else:
         return False
-
-if __name__ == '__main__':
-    asyncio.run(main())

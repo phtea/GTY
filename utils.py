@@ -320,32 +320,32 @@ async def _make_request(session, method, url, headers, body):
         status_code = response.status
         content_type = response.headers.get('Content-Type', '')
 
-        # Handle successful responses
         if status_code in [200, 201]:
-            # Check if response is JSON or text
-            if 'application/json' in content_type or 'text' in content_type:
-                response_text = await response.text()  # For logging and return JSON data
-                try:
-                    return await response.json()  # Return the JSON response
-                except Exception as e:
-                    logging.error(f"Failed to parse JSON: {e}")
-                    return response_text  # Return text if not valid JSON
-            else:
-                # Handle binary content (e.g., file download)
-                response_data = await response.read()
-                return response_data  # Return the binary data (e.g., file contents)
+            response_data = get_data_factory(content_type)            
+            return await response_data(response)
 
-        # Handle 204 No Content
-        if status_code == 204:
-            return True
-
-        # Handle other response statuses
-        else:
-            # Log error with as much info as possible
+        if status_code not in [204]:
             logging.error(f"Request to {url} failed with status {status_code}: {response.reason}")
             return None
+        
+        return True
 
-# Manual mapping of month names in Russian
+def get_data_factory(content_type):
+    if 'application/json' in content_type or 'text' in content_type:
+        return get_json_data
+    return get_binary_data
+
+async def get_json_data(response):
+    try:
+        return await response.json()
+    except Exception as e:
+        logging.error(f"Failed to parse JSON: {e}")
+        return await response.text()
+
+async def get_binary_data(response):
+    response_data = await response.read()
+    return response_data
+
 MONTHS_RUSSIAN = {
     1: "января",
     2: "февраля",
@@ -588,17 +588,17 @@ def extract_task_ids_from_summaries(y_tasks):
 
     return task_info_dict
 
-def extract_gandiva_task_id_from_task(task):
+def extract_gandiva_task_id_from_task(task, field_id_gandiva_task_id):
     """
     Extracts the Gandiva task ID from a single task dictionary.
 
     :param task: A task dictionary containing the GandivaTaskId.
     :return: The Gandiva task ID or None if no task ID is found.
     """
-    return task.get(yapi.YA_FIELD_ID_GANDIVA_TASK_ID)
+    return task.get(field_id_gandiva_task_id)
 
 
-def extract_task_ids_from_gandiva_task_id(y_tasks):
+def extract_task_ids_from_gandiva_task_id(y_tasks, field_id_gandiva_task_id):
     """
     Extracts task IDs from the 'GandivaTaskId' field of each task in y_tasks and detects duplicates.
 
@@ -609,7 +609,7 @@ def extract_task_ids_from_gandiva_task_id(y_tasks):
     seen_gandiva_task_ids = set()  # To track task IDs we've already encountered
 
     for task in y_tasks:
-        gandiva_task_id = extract_gandiva_task_id_from_task(task)
+        gandiva_task_id = extract_gandiva_task_id_from_task(task, field_id_gandiva_task_id)
         ya_task_key = task.get('key')  # Extract the 'key' field
 
         if gandiva_task_id:
@@ -708,24 +708,35 @@ def id_in_summonees_exists(y_author_id: str, y_summonees: list) -> bool:
 
 def extract_existing_comments_from_gandiva(g_comments):
     """
-    Extracts the existing comments from Gandiva and returns two mappings:
+    Extracts the existing comments and their answers from Gandiva and returns two mappings:
     - existing_g_comments: A mapping of y_comment_id to g_comment_id.
     - comment_texts_in_gandiva: A mapping of y_comment_id to g_text.
     
     :param g_comments: List of Gandiva comments.
     :return: Two dictionaries - existing_g_comments and comment_texts_in_gandiva.
     """
+    
     existing_g_comments = {}
     comment_texts_in_gandiva = {}
 
-    for g_comment in g_comments:
+    def process_comment(g_comment):
+        """Helper function to process a comment and extract relevant data."""
         g_text = g_comment['Text']
-        match = re.match(r'\[(\d+)\]', g_text)  # Match [g_comment_id] format
+        match = re.match(r'\[(\d+)\]', g_text)  # Match [y_comment_id] format
+        
         if match:
             y_comment_id = match.group(1)
             g_comment_id = g_comment.get('Id')  # Assuming 'Id' is the g_comment_id in the g_comment object
             existing_g_comments[y_comment_id] = g_comment_id  # Map y_comment_id to g_comment_id
             comment_texts_in_gandiva[y_comment_id] = g_text  # Map y_comment_id to g_text
+
+        # Process any answers recursively
+        for answer in g_comment.get('Answers', []):
+            process_comment(answer)
+
+    # Process each top-level comment
+    for g_comment in g_comments:
+        process_comment(g_comment)
 
     return existing_g_comments, comment_texts_in_gandiva
 
@@ -840,16 +851,3 @@ def normalize_department_name(department_name: str):
     department_name = department_name.strip()
     
     return department_name
-
-
-import yandex_api as yapi
-import gandiva_api as gapi
-import asyncio
-async def main():        
-    pass
-
-
-
-if __name__ == '__main__':
-    asyncio.run(main())
-    

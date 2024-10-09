@@ -17,10 +17,12 @@ PATH_TO_EXCEL       = config.get('Yandex', 'path_to_excel')
 # Create the database and tables
 DB_ENGINE           = db.create_database(DB_URL)
 DB_SESSION          = db.get_session(DB_ENGINE)
+MAX_COMMENT_LENGTH  = 20_000
 
 # To test work on few tasks (for careful testing)
 FEW_DATA            = False
-TEST_FUNC           = False
+TEST_FUNC           = True
+
 
 async def sync_comments(g_tasks, sync_mode: int, get_comments_execution: str = 'async'):
     """
@@ -43,7 +45,6 @@ async def sync_comments(g_tasks, sync_mode: int, get_comments_execution: str = '
     edited_comment_in_y_count = 0
     edited_comment_in_g_count = 0
 
-    # Iterate over the original g_tasks list directly
     for g_task in g_tasks:
         g_task_id = g_task['Id']
         g_comments = g_task_comments.get(g_task_id, [])
@@ -72,22 +73,11 @@ async def fetch_comments_for_tasks(g_tasks, execution_mode: str):
     logging.info("Fetching comments from Gandiva...")
 
     # Extract task IDs directly from g_tasks
-    g_tasks_ids = [g_task['Id'] for g_task in g_tasks]
+    g_task_ids = [g_task['Id'] for g_task in g_tasks]
 
-    if execution_mode == 'async':
-        return await gapi.get_comments_for_tasks_concurrently(g_tasks_ids)
-    
-    return await gapi.get_comments_for_tasks_consecutively(g_tasks_ids)
-
-async def fetch_comments(g_tasks_ids, execution_mode: str):
-    """Fetch comments from Gandiva either asynchronously or synchronously."""
-    logging.info("Fetching comments from Gandiva...")
-    
-    if execution_mode == 'async':
-        return await gapi.get_comments_for_tasks_concurrently(g_tasks_ids)
-    
-    return await gapi.get_comments_for_tasks_consecutively(g_tasks_ids)
-
+    get_comments = gapi.get_comments_generator(execution_mode)
+        
+    return await get_comments(g_task_ids)
 
 async def sync_task_comments(g_task, g_comments, sync_mode):
     """
@@ -121,39 +111,63 @@ def should_skip_comment_sync(sync_mode, sync_programmers, g_comment, g_task_cont
     return sync_mode == sync_programmers and not is_programmer_or_contractor_in_addressees(g_comment, g_task_contractor)
 
 async def sync_gandiva_comments_to_yandex(g_task, y_task_id, g_comments, existing_y_comments, y_comment_texts, g_task_contractor, sync_mode):
-    """Sync Gandiva comments to Yandex."""
+    """Sync Gandiva comments (and their answers) to Yandex."""
+    
     added_to_yandex = 0
     edited_in_yandex = 0
     sync_programmers = 2
-    for g_comment in g_comments:
-        if author_g_comment_is_robot(g_comment): continue
-        
-        if should_skip_comment_sync(sync_mode, sync_programmers, g_comment, g_task_contractor): continue
 
-        g_comment_id = str(g_comment['Id'])
-        g_text = utils.html_to_yandex_format(g_comment['Text'])
-        author_name = get_author_name(g_comment['Author'])
-
-        if g_comment_id in existing_y_comments:
-            y_comment_id = existing_y_comments[g_comment_id]
-            y_text = y_comment_texts[g_comment_id].split('\n', 1)[1]
-
-            if y_text == g_text:
-                logging.debug(f"Skipping Yandex comment {g_comment_id} (content matches).")
-                continue
+    async def process_comments_recursively(comments):
+        """Helper function to process comments and their answers recursively."""
+        nonlocal added_to_yandex, edited_in_yandex
+        for comment in comments:
+            added_to_yandex, edited_in_yandex = await process_g_comment(
+                comment, sync_mode, sync_programmers, g_task_contractor,
+                existing_y_comments, y_task_id, y_comment_texts,
+                added_to_yandex, edited_in_yandex)
             
-            response = await yapi.edit_comment(y_task_id, g_text, g_comment_id, y_comment_id, author_name)
-            if isinstance(response, dict):
-                edited_in_yandex += 1
-        else:
-            response = await yapi.add_comment(y_task_id, g_text, g_comment_id, author_name)
-            if isinstance(response, dict):
-                added_to_yandex += 1
+            # Recursively process any answers
+            if comment.get('Answers'):
+                await process_comments_recursively(comment['Answers'])
+
+    # Start processing the top-level comments and their answers
+    await process_comments_recursively(g_comments)
     
     return added_to_yandex, edited_in_yandex
 
 def author_g_comment_is_robot(g_comment):
     return utils.is_g_comment_author_this(g_comment, gapi.GAND_ROBOT_ID)
+
+async def process_g_comment(g_comment, sync_mode, sync_programmers, g_task_contractor,
+                            existing_y_comments, y_task_id, y_comment_texts,
+                            added_to_yandex, edited_in_yandex):
+    
+    if author_g_comment_is_robot(g_comment): return added_to_yandex, edited_in_yandex
+        
+    if should_skip_comment_sync(sync_mode, sync_programmers, g_comment, g_task_contractor): return added_to_yandex, edited_in_yandex
+
+    g_comment_id = str(g_comment['Id'])
+    g_text = utils.html_to_yandex_format(g_comment['Text'])
+    if len(g_text) > MAX_COMMENT_LENGTH: return
+
+    author_name = get_author_name(g_comment['Author'])
+
+    if g_comment_id not in existing_y_comments:
+        response = await yapi.add_comment(y_task_id, g_text, g_comment_id, author_name)
+        if isinstance(response, dict):
+            added_to_yandex += 1
+        return added_to_yandex, edited_in_yandex
+    y_comment_id = existing_y_comments[g_comment_id]
+    y_text = y_comment_texts[g_comment_id].split('\n', 1)[1]
+
+    if y_text == g_text:
+        logging.debug(f"Skipping Yandex comment {g_comment_id} (content matches).")
+        return added_to_yandex, edited_in_yandex
+    
+    response = await yapi.edit_comment(y_task_id, g_text, g_comment_id, y_comment_id, author_name)
+    if isinstance(response, dict):
+        edited_in_yandex += 1
+        return added_to_yandex, edited_in_yandex
 
 
 async def sync_yandex_comments_to_gandiva(g_task, y_comments, existing_g_comments, g_comment_texts):
@@ -166,7 +180,10 @@ async def sync_yandex_comments_to_gandiva(g_task, y_comments, existing_g_comment
         if should_skip_yandex_comment(y_comment): continue
 
         y_comment_id = str(y_comment.get('id'))
-        y_text_html = utils.markdown_to_html(utils.remove_mentions(y_comment.get('text', '')))
+        y_text = y_comment.get('text', '')
+        if len(y_text) > MAX_COMMENT_LENGTH: continue
+
+        y_text_html = utils.markdown_to_html(utils.remove_mentions())
         g_addressees = get_addressees_for_g_task(g_task)
         y_comment_author = y_comment.get('createdBy', {}).get('display')
 
@@ -279,8 +296,8 @@ async def test():
     sync_mode = 2
     err = False
     stop = True
-    # g_tasks = await gapi.get_tasks(gapi.GroupsOfStatuses.in_progress) # all
-    g_tasks = [await gapi.get_task(196295)]
+    g_tasks = await gapi.get_tasks(gapi.GroupsOfStatuses.in_progress) # all
+    # g_tasks = [await gapi.get_task(196295)]
     res = await sync_comments(g_tasks, sync_mode)
     return res, err, stop
 
@@ -370,7 +387,7 @@ async def sync_services(queue: str, sync_mode: str, board_id: int, to_get_follow
     # Get gandiva_task_ids from Summary (if enabled in config), gandiva_task_id and combine all
     not_closed_task_ids = {}
     if use_summaries: not_closed_task_ids = utils.extract_task_ids_from_summaries(y_tasks)
-    not_closed_task_ids_2 = utils.extract_task_ids_from_gandiva_task_id(y_tasks)
+    not_closed_task_ids_2 = utils.extract_task_ids_from_gandiva_task_id(y_tasks, yapi.YA_FIELD_ID_GANDIVA_TASK_ID)
     not_closed_task_ids.update(not_closed_task_ids_2)
 
     # Add tasks if not in Tracker
