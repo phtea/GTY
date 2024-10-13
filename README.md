@@ -70,11 +70,5 @@ To start the bot, run:
 ```bash
 pythonw main.py
 ```
-
-## License
-
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for more details.
-
 ---
-
-This is a basic setup for the GTY. Adjust the `config.ini` file settings and Python dependencies as needed for your specific environment.
+Feel free to contribute to the project by creating a PR! :)
