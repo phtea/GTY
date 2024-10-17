@@ -27,6 +27,7 @@ YA_FIELD_ID_INITIATOR_DEPARTMENT    = config.get('YandexCustomFieldIds', 'initia
 YA_FIELD_ID_ANALYST                 = config.get('YandexCustomFieldIds', 'analyst')
 YA_FIELD_ID_GANDIVA_TASK_ID         = config.get('YandexCustomFieldIds', 'gandiva_task_id')
 YA_FIELD_ID_ND                      = config.get('YandexCustomFieldIds', 'nd')
+YA_FIELD_ID_DATE_CREATED_IN_G       = config.get('YandexCustomFieldIds', 'date_created_in_g')
 DB_URL                              = config.get('Database', 'url')
 YA_REFRESH_TOKEN                    = ''
 YA_DISK_ACCESS_TOKEN                = config.get('Yandex', 'disk_oauth_token')
@@ -193,10 +194,8 @@ async def g_to_y_fields(g_task: dict, edit: bool, to_get_followers: bool = False
         y_assignee_id = assignee.yandex_user_id if assignee else None
 
     # Convert dates if they exist
-    g_start_date = g_task.get('RequiredStartDate')
-    y_start_date = None
-    if g_start_date:
-        y_start_date = utils.g_to_y_date(g_start_date)
+    y_start_date        = get_date_convert(g_task, "RequiredStartDate")
+    y_date_created_in_g = get_date_convert(g_task, "CreateDate")
     
     # Fields that are specific to the "add" operation
     if not edit:
@@ -211,6 +210,7 @@ async def g_to_y_fields(g_task: dict, edit: bool, to_get_followers: bool = False
             'initiator_department': initiator_department,
             'yandex_start_date': y_start_date,
             'nd': nd,
+            'date_created_in_g': y_date_created_in_g
         }
     
     followers = []
@@ -231,8 +231,16 @@ async def g_to_y_fields(g_task: dict, edit: bool, to_get_followers: bool = False
         'yandex_start_date': y_start_date,
         'assignee_id_yandex': y_assignee_id,
         'followers': followers,
-        'nd': nd
+        'nd': nd,
+        'date_created_in_g': y_date_created_in_g
     }
+
+def get_date_convert(g_task: dict, key: str):
+    g_start_date = g_task.get(key)
+    y_start_date = None
+    if g_start_date:
+        y_start_date = utils.g_to_y_date(g_start_date)
+    return y_start_date
 
 # Functions
 
@@ -433,7 +441,7 @@ async def get_task(y_task_id: str) -> dict:
 
 async def add_task(g_task_id, initiator_name, queue,
                    description="Без описания", y_assignee=None,
-                   task_type=None, initiator_department=None, start=None, nd=None, y_step=None):
+                   task_type=None, initiator_department=None, start=None, nd=None, y_step=None, date_created_in_g=None):
 
     g_task_id = str(g_task_id)
     db_session = db.get_db_session()
@@ -466,6 +474,7 @@ async def add_task(g_task_id, initiator_name, queue,
         if analyst: body[YA_FIELD_ID_ANALYST] = analyst
     if y_step in [0,1,2]: body["assignee"] = analyst
     if nd: body[YA_FIELD_ID_ND] = nd
+    if date_created_in_g: body[YA_FIELD_ID_DATE_CREATED_IN_G] = date_created_in_g
     if start: body["start"] = start
 
     # Convert the body to a JSON string
@@ -478,20 +487,20 @@ async def add_task(g_task_id, initiator_name, queue,
     response = await make_http_request('POST', url, headers=HEADERS, body=body_json)
 
     # Process the response
-    if response and isinstance(response, dict):
-        task_id_yandex = response.get('key')
-        if task_id_yandex:
-            # Add task to the database
-            if db_session is None:
-                db_session = db.get_db_session()
-            db.add_or_update_task(session=db_session, g_task_id=g_task_id, y_task_id=task_id_yandex)
-            return response
-        else:
-            logging.error(f"Failed to retrieve task key from response for task {g_task_id}")
-            return None
-    else:
+    if not (response and isinstance(response, dict)):
         logging.error(f"Failed to add task {g_task_id}")
         return None
+    task_id_yandex = response.get('key')
+
+    if not task_id_yandex:
+        logging.error(f"Failed to retrieve task key from response for task {g_task_id}")
+        return None
+    
+    # Add task to the database
+    if db_session is None:
+        db_session = db.get_db_session()
+    db.add_or_update_task(session=db_session, g_task_id=g_task_id, y_task_id=task_id_yandex)
+    return response
 
 async def add_tasks(g_tasks: list[dict], queue: str, non_closed_ya_task_ids: dict):
     """
@@ -519,6 +528,7 @@ async def add_tasks(g_tasks: list[dict], queue: str, non_closed_ya_task_ids: dic
         task_type           = fields.get('task_type')
         start               = fields.get('yandex_start_date')
         nd                  = fields.get('nd')
+        y_date_created_in_g = fields.get('date_created_in_g')
         
         new_description     = await description_with_attachments(g_task_id, description)
 
@@ -529,7 +539,7 @@ async def add_tasks(g_tasks: list[dict], queue: str, non_closed_ya_task_ids: dic
         # Call add_task and check if a task was successfully added
         result = await add_task(g_task_id, initiator_name, initiator_department=initiator_department,
                                 description=new_description, queue=queue, y_assignee=y_assignee,
-                                task_type=task_type, start=start, nd=nd, y_step=y_step)
+                                task_type=task_type, start=start, nd=nd, y_step=y_step, date_created_in_g=y_date_created_in_g)
 
         # Check if the result indicates the task was added
         if isinstance(result, dict):
@@ -569,7 +579,8 @@ def edit_field_if_different_content(y_task, field_id, new_value):
         return new_value
     return None
 
-async def update_task_if_needed(y_task, g_task_id, initiator_name, initiator_department, description, y_start_date, y_assignee, followers, nd, y_step, g_contractor_id):
+async def update_task_if_needed(y_task, g_task_id, initiator_name, initiator_department, description, y_start_date,
+                                y_assignee, followers, nd, y_step, g_contractor_id, y_date_created_in_g):
     """
     Check which fields need to be updated and call edit_task if any updates are necessary.
     """
@@ -598,7 +609,8 @@ async def update_task_if_needed(y_task, g_task_id, initiator_name, initiator_dep
         'edit_followers': edit_followers,
         'edit_gandiva_task_id': edit_field_if_empty(y_task, YA_FIELD_ID_GANDIVA_TASK_ID, g_task_id),
         'edit_gandiva': edit_field_if_empty(y_task, YA_FIELD_ID_GANDIVA, gandiva),
-        'edit_nd': edit_field_if_empty(y_task, YA_FIELD_ID_ND, nd)
+        'edit_nd': edit_field_if_empty(y_task, YA_FIELD_ID_ND, nd),
+        'y_date_created_in_g': edit_field_if_empty(y_task, YA_FIELD_ID_DATE_CREATED_IN_G, y_date_created_in_g)
     }
 
     # Check for analyst by department
@@ -634,7 +646,8 @@ async def update_task_if_needed(y_task, g_task_id, initiator_name, initiator_dep
         followers           =edit_fields['edit_followers'],
         g_task_id           =edit_fields['edit_gandiva_task_id'],
         gandiva             =edit_fields['edit_gandiva'],
-        nd                  =edit_fields['edit_nd'])
+        nd                  =edit_fields['edit_nd'],
+        date_created_in_g   =edit_fields['y_date_created_in_g'])
     
     if not response_json:
         return False
@@ -696,6 +709,7 @@ async def edit_tasks(g_tasks, y_tasks, to_get_followers, use_summaries=False, ed
         y_assignee_id           = fields.get('assignee_id_yandex')
         followers               = fields.get('followers')
         nd                      = fields.get('nd')
+        y_date_created_in_g     = fields.get('date_created_in_g')
         g_status                = g_task['Status']
         y_status                = utils.g_to_y_status(g_status)
         y_step                  = utils.y_status_to_step(y_status)
@@ -708,7 +722,8 @@ async def edit_tasks(g_tasks, y_tasks, to_get_followers, use_summaries=False, ed
         else:
             description = None
 
-        if await update_task_if_needed(y_task, g_task_id, initiator_name, initiator_department, description, y_start_date, y_assignee_id, followers, nd, y_step, g_contractor_id):
+        if await update_task_if_needed(y_task, g_task_id, initiator_name, initiator_department, description, y_start_date,
+                                       y_assignee_id, followers, nd, y_step, g_contractor_id, y_date_created_in_g):
             edited_task_count += 1
             y_task_id = y_task['key']
             db_session = db.get_db_session()
@@ -727,7 +742,7 @@ async def description_with_attachments(g_task_id, description):
 
 async def edit_task(y_task_id, summary=None, description=None,y_assignee_id=None, task_type=None, priority=None,
                     parent=None, sprint=None, followers=None,initiator_name=None, initiator_department=None,
-                    analyst=None, start=None, g_task_id=None, gandiva=None, nd=None):
+                    analyst=None, start=None, g_task_id=None, gandiva=None, nd=None, date_created_in_g=None):
 
     # Convert the task ID to a string
     y_task_id = str(y_task_id)
@@ -748,6 +763,7 @@ async def edit_task(y_task_id, summary=None, description=None,y_assignee_id=None
     if initiator_name: body[YA_FIELD_ID_INITIATOR] = initiator_name
     if initiator_department:body[YA_FIELD_ID_INITIATOR_DEPARTMENT] = initiator_department
     if nd: body[YA_FIELD_ID_ND] = nd
+    if date_created_in_g: body[YA_FIELD_ID_DATE_CREATED_IN_G] = date_created_in_g
     if analyst: body[YA_FIELD_ID_ANALYST] = analyst
     if start: body["start"] = start
     if g_task_id:
