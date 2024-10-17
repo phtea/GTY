@@ -534,9 +534,8 @@ async def handle_waiting_for_analyst_or_no_contractor_no_required_start_date(g_t
         initiator_id            = g_task_anomaly.get('Initiator', {}).get('Id')
         department              = await get_department_by_user_id(initiator_id)
         y_analyst               = db.get_user_id_by_department(session=db_session, department_name=department)
-        user                    = db.get_user_by_yandex_id(db_session, y_analyst)
-        g_analyst_id            = None
-        if user: g_analyst_id   = user.gandiva_user_id
+        user                    = db.get_user_by_yandex_id(db_session, y_analyst) if y_analyst else None
+        g_analyst_id            = user.gandiva_user_id if user else None
         res_contractor          = None
         res_date                = None
 

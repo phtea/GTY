@@ -261,7 +261,7 @@ def get_nd_by_department_name(session: Session, department_name: str) -> str|Non
         department_name = utils.normalize_department_name(department_name)
 
         department = session.query(Department).filter_by(department_name=department_name).one_or_none()
-        return department.nd
+        return department.nd if department else None
     except NoResultFound:
         logging.debug(f"No department found with department_name {department_name}.")
         return None
