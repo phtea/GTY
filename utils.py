@@ -7,6 +7,13 @@ import aiohttp
 import datetime
 import warnings
 import markdown
+import configparser
+from typing import Callable
+
+
+import pandas as pd
+from pandas import DataFrame
+import io
 
 warnings.filterwarnings("ignore", category=MarkupResemblesLocatorWarning)
 
@@ -23,7 +30,8 @@ def setup_logging():
     handler = RotatingFileHandler("gty.log", maxBytes=max_size, backupCount=backupCount)
 
     # Set the logging format
-    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s (%(module)s: %(funcName)s)")
+    formatter = logging.Formatter(
+        "%(asctime)s - %(levelname)s - %(message)s (%(module)s: %(funcName)s)")
     handler.setFormatter(formatter)
 
     # Add handler to the root logger
@@ -45,7 +53,7 @@ def extract_task_ids(tasks: list) -> list:
     """Extracts the 'Id' values from a list of tasks."""
     return [task.get('Id') for task in tasks if 'Id' in task]
 
-def y_status_to_step(y_status):
+def y_status_to_step(y_status: str) -> int:
     status_to_step = {
         "open": 0,
         "onenew": 1,
@@ -65,7 +73,10 @@ def y_status_to_step(y_status):
         "oneclosed": 15,
         "onecancelled": 16
     }
-    return status_to_step.get(y_status)
+    step:int|None = status_to_step.get(y_status)
+    if not step:
+        return 0
+    return step
 
 def y_step_to_status(y_step):
     step_to_status = {
@@ -105,7 +116,7 @@ def get_y_transition_from_g_status(g_status):
     }
     return status_to_transition.get(g_status)
 
-def g_to_y_status(g_status):
+def g_to_y_status(g_status: int) -> str:
     g_status_to_y_status = {
         3: "onenew",
         4: "fourinformationrequired",
@@ -119,7 +130,10 @@ def g_to_y_status(g_status):
         12: "twowaitingfortheanalyst",
         13: "threewritingtechnicalspecific"
     }
-    return g_status_to_y_status.get(g_status)
+    y_status = g_status_to_y_status.get(g_status)
+    if not y_status:
+        return ""
+    return y_status
 
 def extract_text_from_html(html):
     soup = BeautifulSoup(html, "html.parser")
@@ -228,7 +242,7 @@ def markdown_to_html(markdown_text):
     html_text = markdown.markdown(markdown_text)
     html_text = prepend_host_to_relative_links(html_text, YANDEX_HOST)
     # html_text = wrap_raw_urls_in_html(html_text, YANDEX_HOST)
-    html_text = handle_raw_urls_to_html(html_text)
+    html_text = convert_raw_urls_to_html(html_text)
     
     return html_text
 
@@ -241,66 +255,42 @@ def prepend_host_to_relative_links(html_text, host):
     # Find all <a> tags
     for a in soup.find_all('a'):
         href = a.get('href', '')
-        if not re.match(r'^https?://', href):  # If the href doesn't start with http(s), it's relative
-            a['href'] = host + href  # Prepend the host to the href
+        starts_with_https = re.match(r'^https?://', href)
+        if not starts_with_https:
+            a['href'] = host + href
 
     # Find all <img> tags
     for img in soup.find_all('img'):
         src = img.get('src', '')
-        if not re.match(r'^https?://', src):  # If the src doesn't start with http(s), it's relative
-            img['src'] = host + src  # Prepend the host to the src
+        starts_with_https = re.match(r'^https?://', src)
+        if not starts_with_https:
+            img['src'] = host + src
 
     return str(soup)
 
-def handle_raw_urls_to_html(text):
-    url_pattern = r'(?<!["\'])\bhttps?://[^\s<>"]+'  # Regex to match raw URLs not inside quotes or tags
+def convert_raw_urls_to_html(text):
+    url_pattern = r'(?<!["\'])\bhttps?://[^\s<>"]+'
     
-    # Function to replace raw URLs with the link itself
-    def replace_with_attachment(match):
-        url = match.group(0)  # Full URL match
-        return f'<a href="{url}">{url}</a>'  # Use the URL as the link text
+    def wrap_url_in_link(match):
+        raw_url = match.group(0)
+        return f'<a href="{raw_url}">{raw_url}</a>'
     
-    # Use re.sub to replace only raw URLs
-    html_text = re.sub(url_pattern, replace_with_attachment, text)
-    
-    return html_text
+    return re.sub(url_pattern, wrap_url_in_link, text)
 
-def g_to_y_date(gandiva_date: str) -> str:
-    """
-    Converts a Gandiva date (with time and timezone) to Yandex date (only date part).
-    Args:
-        gandiva_date (str): The date string in Gandiva format (e.g., '2025-08-01T00:00:00+03:00').
-    Returns:
-        str: The date in Yandex format (e.g., '2025-08-01').
-    """
-    # Parse the Gandiva date string into a datetime object
-    date_obj = datetime.datetime.fromisoformat(gandiva_date)
-    
-    # Convert the datetime object back to a string in 'YYYY-MM-DD' format
-    return date_obj.strftime('%Y-%m-%d')
+def convert_gandiva_to_yandex_date(gandiva_date: str) -> str:
+    parsed_date = datetime.datetime.fromisoformat(gandiva_date)
+    return parsed_date.strftime('%Y-%m-%d')
 
-async def make_http_request(method, url, headers=None, body=None, session=None):
-    """
-    Generalized function to handle HTTP GET/POST requests.
+async def perform_http_request(
+        method: str, url: str, headers: dict|None = None,
+        body: str|None = None, session: aiohttp.ClientSession|None = None):
     
-    Args:
-    - method (str): HTTP method (GET, POST, PUT, PATCH, DELETE).
-    - url (str): The URL for the request.
-    - headers (dict, optional): Request headers.
-    - body (dict, optional): Request body.
-    - session (aiohttp.ClientSession, optional): Existing aiohttp session.
-    
-    Returns:
-    - dict or None: JSON response if successful, None otherwise.
-    """
-    
-    valid_methods = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']
-    if method.upper() not in valid_methods:
+    allowed_methods = {'GET', 'POST', 'PUT', 'PATCH', 'DELETE'}
+    if method.upper() not in allowed_methods:
         logging.error(f"Invalid HTTP method: {method}")
         return None
 
     try:
-        # Create a new session if one is not provided
         if session is None:
             async with aiohttp.ClientSession() as session:
                 return await _make_request(session, method, url, headers, body)
@@ -311,7 +301,9 @@ async def make_http_request(method, url, headers=None, body=None, session=None):
         logging.error(f"Exception during request to {url}: {str(e)}")
         return None
 
-async def _make_request(session, method, url, headers, body):
+async def _make_request(
+        session: aiohttp.ClientSession, method: str,
+        url: str, headers: dict|None, body: str|None):
     """
     Helper function to make an HTTP request using a given session.
     Handles both JSON/text responses and binary file downloads.
@@ -320,29 +312,30 @@ async def _make_request(session, method, url, headers, body):
         status_code = response.status
         content_type = response.headers.get('Content-Type', '')
 
-        if status_code in [200, 201]:
-            response_data = get_data_factory(content_type)            
-            return await response_data(response)
+        successful_statuses = {200, 201}
+        if status_code in successful_statuses:
+            response_data_handler = data_handler_factory(content_type)
+            return await response_data_handler(response)
 
-        if status_code not in [204]:
+        if status_code != 204:
             logging.error(f"Request to {url} failed with status {status_code}: {response.reason}")
             return None
         
         return True
 
-def get_data_factory(content_type):
+def data_handler_factory(content_type: str) -> Callable:
     if 'application/json' in content_type or 'text' in content_type:
-        return get_json_data
-    return get_binary_data
+        return parse_json_data
+    return read_binary_data
 
-async def get_json_data(response):
+async def parse_json_data(response: aiohttp.ClientResponse) -> str:
     try:
         return await response.json()
     except Exception as e:
         logging.error(f"Failed to parse JSON: {e}")
         return await response.text()
 
-async def get_binary_data(response):
+async def read_binary_data(response: aiohttp.ClientResponse) -> bytes:
     response_data = await response.read()
     return response_data
 
@@ -362,113 +355,73 @@ MONTHS_RUSSIAN = {
 }
 
 def extract_department_analysts(csv_file: str) -> dict:
-    """
-    Extracts departments, their corresponding activity direction (НД), and analyst emails from the given CSV file.
+    department_analyst_mapping = {}
 
-    Parameters:
-    - csv_file (str): Path to the CSV file containing department, НД, and analyst information.
-
-    Returns:
-    - dict: A dictionary where the keys are department names and the values are dictionaries containing 'НД' and 'yandex_analyst_mail'.
-    """
-    department_analyst_dict = {}
-
-    # Try a different encoding, such as ISO-8859-1 or cp1251
     with open(csv_file, mode='r', encoding='cp1251') as file:
         reader = csv.DictReader(file, delimiter=';')
 
-        for row in reader:
-            department = row['department']
-            nd = row['НД']  # Extract the НД column
-            analyst_email = row['yandex_analyst_mail']
+        for entry in reader:
+            department = entry['department']
+            activity_direction = entry['НД']
+            analyst_email = entry['yandex_analyst_mail']
 
-            # Store the НД and analyst email corresponding to the department
-            department_analyst_dict[department] = {
-                'НД': nd,
+            department_analyst_mapping[department] = {
+                'НД': activity_direction,
                 'yandex_analyst_mail': analyst_email
             }
 
-    return department_analyst_dict
+    return department_analyst_mapping
 
-def map_department_nd_to_user_id(department_analyst_dict: dict, users: list) -> dict:
-    """
-    Maps each department and НД (activity direction) to the corresponding user ID based on matching email addresses.
-
-    Parameters:
-    - department_analyst_dict (dict): A dictionary where the keys are department names and the values are dictionaries 
-      containing 'НД' and 'yandex_analyst_mail'.
-    - users (list): A list of user objects, where each object contains an 'email' and 'uid' key.
-
-    Returns:
-    - dict: A dictionary where the keys are tuples of (department, НД) and the values are the corresponding user IDs (uids).
-    """
+def map_department_nd_to_user_id(department_analyst_mapping: dict, user_list: list) -> dict:
     department_user_mapping = {}
 
-    # Create a dictionary to quickly lookup user 'uid' by their email
-    email_to_uid = {user['email']: user['uid'] for user in users}
+    email_to_uid_mapping = {user['email']: user['uid'] for user in user_list}
 
-    # Iterate over each department and НД, and find the matching uid for the analyst's email
-    for department, details in department_analyst_dict.items():
-        email = details['yandex_analyst_mail']
-        nd = details['НД']  # Extract the НД value
-        uid = email_to_uid.get(email)  # Find the user 'uid' by email
-        department = department.strip()
+    for department, details in department_analyst_mapping.items():
+        analyst_email = str(details['yandex_analyst_mail']).strip()
+        activity_direction = str(details['НД'])
+        user_id = email_to_uid_mapping.get(analyst_email)
 
-        if uid:
-            department_user_mapping[(department, nd)] = uid
+        if user_id:
+            department_user_mapping[(department.strip(), activity_direction)] = user_id
         else:
-            logging.warning(f"No user found with email {email} for department {department} and НД {nd}")
+            logging.warning((
+                f"No user found with email {analyst_email} for department "
+                f"{department} and НД {activity_direction}"))
 
     return department_user_mapping
 
 def extract_it_users(csv_file_path: str) -> dict:
-    """
-    Extracts data from it_users.csv file and returns a dictionary where
-    yandex_mail is the key and gandiva_mail is the value.
-
-    :param csv_file_path: Path to the CSV file.
-    :return: A dictionary with yandex_mail as keys and gandiva_mail as values.
-    """
-    it_users_dict = {}
+    it_users_mapping = {}
 
     with open(csv_file_path, mode='r', encoding='utf-8') as file:
         reader = csv.DictReader(file, delimiter=';')
-        
-        # Iterate over each row and map yandex_mail to gandiva_mail
+
         for row in reader:
-            yandex_mail = row['yandex_mail']
-            gandiva_mail = row['gandiva_mail']
-            it_users_dict[yandex_mail] = gandiva_mail
+            yandex_email = row['yandex_mail']
+            gandiva_email = row['gandiva_mail']
+            it_users_mapping[yandex_email] = gandiva_email
 
-    return it_users_dict
+    return it_users_mapping
 
-def extract_it_users_from_excel(excel_sheets: dict) -> dict:
-    """
-    Extracts data from the 'it_users' Excel sheet and returns a dictionary where
-    yandex_mail is the key and gandiva_mail is the value.
+def extract_it_users_from_excel(excel_sheets: dict[str, DataFrame]) -> dict:
+    it_users_mapping = {}
 
-    :param excel_sheets: Dictionary of sheets read from the Excel file (with sheet names as keys).
-    :return: A dictionary with yandex_mail as keys and gandiva_mail as values.
-    """
-    it_users_dict = {}
-
-    # Access the 'it_users' sheet
-    if 'it_users' in excel_sheets:
-        df = excel_sheets['it_users']
-
-        # Ensure the columns are present
-        if {'yandex_mail', 'gandiva_mail'}.issubset(df.columns):
-            # Iterate through the rows and map yandex_mail to gandiva_mail
-            for _, row in df.iterrows():
-                yandex_mail = row['yandex_mail']
-                gandiva_mail = row['gandiva_mail']
-                it_users_dict[yandex_mail] = gandiva_mail
-        else:
-            raise ValueError("Required columns ('yandex_mail', 'gandiva_mail') are missing in the sheet.")
-    else:
+    if 'it_users' not in excel_sheets:
         raise ValueError("Sheet 'it_users' not found in the Excel file.")
     
-    return it_users_dict
+    dataframe = excel_sheets['it_users']
+
+    if not {'yandex_mail', 'gandiva_mail'}.issubset(dataframe.columns):
+        raise ValueError(
+            "Required columns ('yandex_mail', 'gandiva_mail') are missing in the sheet.")
+
+    for _, row in dataframe.iterrows():
+        yandex_email = row['yandex_mail']
+        gandiva_email = row['gandiva_mail']
+        it_users_mapping[yandex_email] = gandiva_email
+
+    return it_users_mapping
 
 async def map_emails_to_ids(it_users_dict: dict, ya_users: list) -> dict:
     """
@@ -648,7 +601,7 @@ def find_unmatched_tasks(y_tasks, extracted_task_ids):
     
     return unmatched_tasks
 
-def extract_observers_from_detailed_task(detailed_task: dict) -> list:
+def extract_observers_from_detailed_task(detailed_task: dict) -> list[str]:
     """
     Extracts observer IDs from a detailed task.
 
@@ -782,9 +735,8 @@ def get_next_year_datetime():
     
     return next_year_datetime
 
-import pandas as pd
-import io
-def read_excel_from_bytes(excel_bytes):
+
+def read_excel_from_bytes(excel_bytes) -> dict[str, DataFrame]|None:
     """
     Reads an Excel file from bytes and returns a pandas DataFrame.
     
@@ -851,3 +803,10 @@ def normalize_department_name(department_name: str):
     department_name = department_name.strip()
     
     return department_name
+
+def load_config(path: str):
+    config = configparser.ConfigParser()
+    config.read(path)
+    return config
+
+config = load_config('config.ini')

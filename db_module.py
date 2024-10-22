@@ -1,17 +1,19 @@
 import logging
 from sqlalchemy import create_engine, Column, String, ForeignKey, Table, func, text
-from sqlalchemy.orm import declarative_base, relationship, sessionmaker, Session
+from sqlalchemy.orm import relationship, sessionmaker, Session, DeclarativeBase
 from sqlalchemy.exc import NoResultFound, IntegrityError
-import yandex_api
+from yandex_api import yc
 import utils
 
-DB_URL = None
+DB_URL: str|None = None
 
 def set_db_url(db_url):
     global DB_URL
     DB_URL = db_url
 
-Base = declarative_base()
+class Base(DeclarativeBase):
+    pass
+
 
 class Task(Base):
     __tablename__ = 'tasks'
@@ -82,7 +84,7 @@ def update_database_schema(engine):
 def add_task_no_commit(session: Session, y_task: dict):
     """ Add a single task to the database or update it if it exists. """
     y_task_id         = y_task.get('key')
-    g_task_id         = y_task.get(yandex_api.YA_FIELD_ID_GANDIVA_TASK_ID)
+    g_task_id         = y_task.get(yc.fid_gandiva_task_id)
     
     if not g_task_id:
         logging.debug(f"No Gandiva ID found for Yandex task {y_task_id}, skipping.")
@@ -116,6 +118,8 @@ def add_user_department_nd_mapping(session: Session, department_user_mapping: di
     skipped_entries = 0
 
     for (department_name, nd), y_user_id in department_user_mapping.items():
+        department_name = str(department_name)
+        nd = str(nd)
         y_user_id = str(y_user_id)
         # Normalize department_name
         department_name = utils.normalize_department_name(department_name)
@@ -138,18 +142,19 @@ def add_user_department_nd_mapping(session: Session, department_user_mapping: di
             session.add(department)
             logging.info(f"Department {department_name} with НД {nd} added to the database and assigned to user {y_user_id}.")
             total_entries += 1
+            continue
+        
+        # Check if both the department's ND and yandex_user_id match the incoming data
+        if str(department.nd) == nd and str(department.yandex_user_id) == y_user_id:
+            # If the department is already up to date, skip the update
+            logging.debug(f"Department {department_name} is already up-to-date with user {y_user_id} and НД {nd}. Skipping update.")
+            skipped_entries += 1
         else:
-            # Check if both the department's ND and yandex_user_id match the incoming data
-            if department.nd == nd and department.yandex_user_id == y_user_id:
-                # If the department is already up to date, skip the update
-                logging.debug(f"Department {department_name} is already up-to-date with user {y_user_id} and НД {nd}. Skipping update.")
-                skipped_entries += 1
-            else:
-                # Update department's ND field and user if needed
-                department.nd = nd
-                department.yandex_user_id = y_user_id
-                logging.info(f"Department {department_name} updated with НД {nd} and assigned to user {y_user_id}.")
-                total_entries += 1
+            # Update department's ND field and user if needed
+            department.nd = Column(nd)
+            department.yandex_user_id = Column(y_user_id)
+            logging.info(f"Department {department_name} updated with НД {nd} and assigned to user {y_user_id}.")
+            total_entries += 1
 
     session.commit()  # Commit all changes at once
     logging.info(f"{total_entries} user-department mappings added/updated in the database. {skipped_entries} entries skipped.")
@@ -157,7 +162,7 @@ def add_user_department_nd_mapping(session: Session, department_user_mapping: di
     return bool(total_entries)
 
 
-def get_user_id_by_department(session: Session, department_name: str) -> str:
+def get_user_id_by_department(session: Session, department_name: str) -> str|None:
     """ Retrieves the user ID associated with the given department from the database. """
     try:
         department_name = utils.normalize_department_name(department_name)
@@ -167,7 +172,7 @@ def get_user_id_by_department(session: Session, department_name: str) -> str:
         if not department:
             logging.warning(f"No user found for department: {department_name}")
             return None
-        return department.yandex_user_id
+        return str(department.yandex_user_id)
     
     except Exception as e:
         logging.error(f"Error fetching user ID for department {department_name}: {e}")
@@ -183,10 +188,10 @@ def add_or_update_user(session: Session, user_data: dict):
 
             if user:
                 # If the user exists but gandiva_user_id is empty or None, update it
-                if user.gandiva_user_id:
+                if user.gandiva_user_id is not None:
                     logging.debug(f"User {y_user_id} already exists with Gandiva ID {user.gandiva_user_id}. No update required.")
                     continue
-                user.gandiva_user_id = str(g_user_id)
+                user.gandiva_user_id = Column(str(g_user_id))
                 session.commit()
                 logging.info(f"Updated user {y_user_id} with Gandiva ID {g_user_id}.")
                 updates_count += 1
@@ -204,13 +209,13 @@ def add_or_update_user(session: Session, user_data: dict):
 
     return bool(updates_count)
 
-def add_or_update_task(session: Session, g_task_id: str, y_task_id: str):
+def add_or_update_task(session: Session, g_task_id: str, y_task_id: str) -> None:
     """ Adds a new task if it doesn't exist, otherwise updates the existing one. """
     try:
         # Check if the task already exists
         task = session.query(Task).filter_by(task_id_yandex=y_task_id).one_or_none()
 
-        if not task:
+        if task is None:
             new_task = Task(task_id_yandex=y_task_id, task_id_gandiva=g_task_id)
             session.add(new_task)
             session.commit()
@@ -218,8 +223,8 @@ def add_or_update_task(session: Session, g_task_id: str, y_task_id: str):
             return
 
         # If the task exists, update the Gandiva task ID if needed
-        if task.task_id_gandiva != g_task_id:
-            task.task_id_gandiva = g_task_id
+        if str(task.task_id_gandiva) != g_task_id:
+            task.task_id_gandiva = Column(g_task_id)
             session.commit()
             logging.info(f"Task {y_task_id} updated in the database with Gandiva ID {g_task_id}.")
             return
@@ -261,7 +266,9 @@ def get_nd_by_department_name(session: Session, department_name: str) -> str|Non
         department_name = utils.normalize_department_name(department_name)
 
         department = session.query(Department).filter_by(department_name=department_name).one_or_none()
-        return department.nd
+        if not department:
+            return None
+        return str(department.nd)
     except NoResultFound:
         logging.debug(f"No department found with department_name {department_name}.")
         return None
@@ -269,11 +276,13 @@ def get_nd_by_department_name(session: Session, department_name: str) -> str|Non
         logging.error(f"Error retrieving department by department_name {department_name}: {str(e)}")
         return None
 
-def convert_gandiva_observers_to_yandex_followers(session, gandiva_observers: list[int]) -> list[int]:
+def convert_gandiva_observers_to_yandex_followers(
+        session, gandiva_observers: list[str]) -> list[str]:
     """ Converts a list of Gandiva observer IDs to corresponding Yandex follower IDs. """
     yandex_followers = [
-        user.yandex_user_id for gandiva_id in gandiva_observers 
-        if (user := get_user_by_gandiva_id(session, gandiva_id)) and user.yandex_user_id
+        str(user.yandex_user_id) for gandiva_id in gandiva_observers 
+        if ((user := get_user_by_gandiva_id(session, str(gandiva_id)))
+            and bool(user.yandex_user_id))
     ]
 
     return yandex_followers
@@ -293,17 +302,44 @@ def find_duplicate_gandiva_tasks(db_session: Session) -> None:
 
 def clean_department_names(db_session: Session):
     try:
-        update_query = text("""
-        UPDATE departments
-        SET department_name = TRIM(REPLACE(REPLACE(department_name, ' ', ' '), '  ', ' '))
-        WHERE department_name LIKE '% %' OR department_name LIKE '%  %';
-        """)
-
-        result = db_session.execute(update_query)
+        rows_affected = db_session.query(Department).filter(
+            Department.department_name.like('% %') | Department.department_name.like('%  %')
+        ).update({
+            Department.department_name: func.trim(
+                func.replace(func.replace(Department.department_name, ' ', ' '), '  ', ' ')
+            )
+        }, synchronize_session=False)
+        
         db_session.commit()
 
-        logging.info(f"Department names cleaned successfully. Rows affected: {result.rowcount}")
+        logging.info(f"Department names cleaned successfully. Rows affected: {rows_affected}")
 
     except Exception as e:
         db_session.rollback()
         logging.error(f"Error occurred: {e}")
+
+
+def is_user_analyst(session: Session, yandex_user_id: str|None) -> bool:
+    """
+    Checks if the given Yandex user ID is listed as an analyst in any department.
+
+    :param session: SQLAlchemy session object.
+    :param yandex_user_id: The Yandex user ID to check.
+    :return: True if the user is an analyst in any department, False otherwise.
+    """
+    if not yandex_user_id:
+        logging.debug("Yandex user id of None was used!")
+        return False
+    try:
+        # Check if the user is associated with any department in the departments table
+        analyst_exists = session.query(Department).filter_by(yandex_user_id=yandex_user_id).count()
+
+        if analyst_exists > 0:
+            return True
+        else:
+            logging.debug(f"User {yandex_user_id} is not an analyst in any department.")
+            return False
+
+    except Exception as e:
+        logging.error(f"Error checking if user {yandex_user_id} is an analyst: {e}")
+        return False
