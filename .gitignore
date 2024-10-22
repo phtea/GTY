@@ -8,3 +8,5 @@ test.py
 *.log
 autolaunch.txt
 *.bak
+*.idea
+*cache
