@@ -52,7 +52,7 @@ class GandivaTokens:
             self.token_expiry_date = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
 
 # Initialize configurations and tokens
-gc = GandivaConfig(utils.config)
+gc = GandivaConfig(utils.ConfigObject)
 gt = GandivaTokens()
 
 class Statuses:
@@ -61,7 +61,7 @@ class Statuses:
     waiting                 = [10, 11, 12]
     waiting_or_finished     = [5, 7, 9, 10, 11, 12]
     finished                = [5, 7, 9]
-    _all                    = [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+    all_                    = [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
 
 
 
@@ -176,7 +176,6 @@ def get_headers(content_type="application/json"):
         "Authorization": f"Bearer {gt.access_token}"
     }
 
-# Functions
 
 @token_refresh_decorator
 async def get_task(g_task_id: str) -> dict|None:
@@ -286,8 +285,8 @@ async def get_comments_for_tasks_concurrently(g_task_ids: list[int]):
     async def fetch_comments(task_id):
         """Fetch comments for a single task ID while respecting the semaphore limit."""
         async with semaphore:  # Acquire the semaphore
-            comments = await get_task_comments(task_id)
-            return task_id, comments
+            comment_data = await get_task_comments(task_id)
+            return task_id, comment_data
 
     # Create a list of tasks
     tasks = [fetch_comments(task_id) for task_id in g_task_ids]
@@ -319,7 +318,9 @@ def get_comments_generator(execution_mode: str = 'async') -> Callable:
     return get_comments_for_tasks_consecutively
 
 @token_refresh_decorator
-async def get_tasks(statutes: list[int] = [3, 4, 6, 8, 10, 11]) -> list[dict]:
+async def get_tasks(statutes=None) -> list[dict]:
+    if statutes is None:
+        statutes = [3, 4, 6, 8, 10, 11]
     logging.info("Fetching tasks...")
     all_requests: list[dict] = []
     
@@ -537,7 +538,6 @@ async def handle_no_contractor_or_waiting_for_analyst(g_tasks):
             logging.warning(f"No analyst found for task {g_task_id}, skipping [edit contractor]...")
             continue
         g_analyst_id = str(g_analyst_id)
-        res_contractor          = None
         res_date                = None
 
         if not g_task_anomaly['RequiredStartDate']:

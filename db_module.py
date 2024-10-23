@@ -1,5 +1,5 @@
 import logging
-from sqlalchemy import create_engine, Column, String, ForeignKey, Table, func, text
+from sqlalchemy import create_engine, Column, String, ForeignKey, func
 from sqlalchemy.orm import relationship, sessionmaker, Session, DeclarativeBase
 from sqlalchemy.exc import NoResultFound, IntegrityError
 from yandex_api import yc
@@ -49,8 +49,8 @@ def create_database(db_url):
     return engine
 
 def get_session(engine):
-    Session = sessionmaker(bind=engine)
-    return Session()
+    new_session = sessionmaker(bind=engine)
+    return new_session()
 
 def get_db_session():
     db_engine = create_database(DB_URL)
@@ -113,51 +113,50 @@ def add_tasks(session: Session, y_tasks: list):
     logging.info(f"{total_tasks} tasks added/updated in the database.")
 
 def add_user_department_nd_mapping(session: Session, department_user_mapping: dict):
-    """ Adds or updates the user and department relationship in the database, considering both the department and НД fields. """
+    """Adds or updates user-department mappings in the database
+    based on department name and НД (ND)."""
     total_entries = 0
     skipped_entries = 0
-
-    for (department_name, nd), y_user_id in department_user_mapping.items():
-        department_name = str(department_name)
-        nd = str(nd)
-        y_user_id = str(y_user_id)
-        # Normalize department_name
-        department_name = utils.normalize_department_name(department_name)
-        
-        # Check if the user exists in the database
-        user = session.query(User).filter_by(yandex_user_id=y_user_id).one_or_none()
-
+    
+    def add_user_if_not_exists(session: Session, y_user_id: str, user: User|None) -> None:
         if not user:
-            # If the user doesn't exist, create and add a new user
-            user = User(yandex_user_id=y_user_id)
-            session.add(user)
+            session.add(User(yandex_user_id=y_user_id))
             logging.info(f"User {y_user_id} added to the database.")
 
-        # Check if the department exists in the database
-        department = session.query(Department).filter_by(department_name=department_name).one_or_none()
+    for (department_name, nd), y_user_id in department_user_mapping.items():
+        department_name = utils.normalize_department_name(str(department_name))
+        nd = str(nd)
+        y_user_id = str(y_user_id)
 
+        user = session.query(User).filter_by(yandex_user_id=y_user_id).one_or_none()
+        add_user_if_not_exists(session, y_user_id, user)
+
+        department = (session.query(Department)
+                      .filter_by(department_name=department_name)
+                      .one_or_none())
         if not department:
-            # If the department doesn't exist, create and add a new department with the НД field
-            department = Department(department_name=department_name, nd=nd, yandex_user_id=y_user_id)
-            session.add(department)
-            logging.info(f"Department {department_name} with НД {nd} added to the database and assigned to user {y_user_id}.")
+            session.add(
+                Department(department_name=department_name, nd=nd, yandex_user_id=y_user_id))
+            logging.info(f"Department {department_name} with НД {nd} added for user {y_user_id}.")
             total_entries += 1
             continue
+
+        data_was_changed = (
+            str(department.nd) != nd
+            or str(department.yandex_user_id) != y_user_id)
         
-        # Check if both the department's ND and yandex_user_id match the incoming data
-        if str(department.nd) == nd and str(department.yandex_user_id) == y_user_id:
-            # If the department is already up to date, skip the update
-            logging.debug(f"Department {department_name} is already up-to-date with user {y_user_id} and НД {nd}. Skipping update.")
+        if not data_was_changed:
             skipped_entries += 1
+            logging.debug(f"Skipping update for department {department_name}.")
         else:
-            # Update department's ND field and user if needed
-            department.nd = Column(nd)
-            department.yandex_user_id = Column(y_user_id)
-            logging.info(f"Department {department_name} updated with НД {nd} and assigned to user {y_user_id}.")
+            department.nd = nd  # type: ignore
+            department.yandex_user_id = y_user_id  # type: ignore
+            logging.info(
+                f"Department {department_name} updated with НД {nd} for user {y_user_id}.")
             total_entries += 1
 
-    session.commit()  # Commit all changes at once
-    logging.info(f"{total_entries} user-department mappings added/updated in the database. {skipped_entries} entries skipped.")
+    session.commit()
+    logging.info(f"{total_entries} mappings added/updated. {skipped_entries} entries skipped.")
 
     return bool(total_entries)
 
@@ -295,10 +294,11 @@ def find_duplicate_gandiva_tasks(db_session: Session) -> None:
                   .having(func.count(Task.task_id_gandiva) > 1)
                   .all())
 
-    for gandiva_id in duplicates:
+    for gandiva_id, _ in duplicates:
         yandex_ids = db_session.query(Task.task_id_yandex).filter(Task.task_id_gandiva == gandiva_id).all()
-        yandex_ids_list = [y[0] for y in yandex_ids]
-        logging.warning(f"Duplicate task_id_gandiva: {gandiva_id}, associated task_id_yandex: {', '.join(yandex_ids_list)}")
+        yandex_ids_list = [str(y[0]) for y in yandex_ids]
+        logging.warning(
+            f"Duplicate task_id_gandiva: {gandiva_id}, associated task_id_yandex: {', '.join(yandex_ids_list)}")
 
 def clean_department_names(db_session: Session):
     try:
