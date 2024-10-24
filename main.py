@@ -8,6 +8,7 @@ import db_module as db
 import utils
 import re
 from pandas import DataFrame
+from typing import Any
 
 # Globals
 MAX_COMMENT_LENGTH = 20_000
@@ -75,7 +76,7 @@ def extract_task_ids(g_tasks):
     return [g_task['Id'] for g_task in g_tasks]
 
 
-async def sync_task_comments(g_task: dict, g_comments: list[dict], sync_mode: int):
+async def sync_task_comments(g_task: dict[str, Any], g_comments: list[dict], sync_mode: int):
     y_task = fetch_yandex_task(g_task)
 
     if not y_task:
@@ -86,13 +87,23 @@ async def sync_task_comments(g_task: dict, g_comments: list[dict], sync_mode: in
     y_task_id = str(y_task.task_id_yandex)
     y_comments = await yapi.get_comments(y_task_id)
 
-    g_task_contractor = g_task.get('Contractor', {}).get('Id')
+    contractor: dict[str, Any] | None = g_task.get('Contractor')
+    if not contractor:
+        logging.error("Contractor not found in task.")
+        return initialize_comment_counts()
+
+    contractor_id = contractor.get('Id')
+    if not contractor_id:
+        logging.error("Contractor ID not found in task.")
+        return initialize_comment_counts()
+
+    contractor_id = str(contractor_id)
     existing_g_comments, g_comment_texts = extract_gandiva_comments(g_comments)
     existing_y_comments, y_comment_texts = extract_yandex_comments(y_comments)
 
     added_to_yandex, edited_in_yandex = await sync_gandiva_comments_to_yandex(
         y_task_id, g_comments, existing_y_comments,
-        y_comment_texts, g_task_contractor, sync_mode
+        y_comment_texts, contractor_id, sync_mode
     )
 
     added_to_gandiva, edited_in_gandiva = await sync_yandex_comments_to_gandiva(
@@ -326,7 +337,7 @@ async def run_sync_services_periodically(queue: str, sync_mode: int, board_id: s
 async def update_tasks_in_db(queue: str):
     y_tasks = await yapi.get_tasks(query=yapi.get_query_in_progress(queue))
     db_session = db.get_db_session()
-    db.add_tasks(session=db_session, y_tasks=y_tasks)
+    db.add_tasks(db_session, y_tasks, yc.fid_gandiva_task_id)
 
 
 async def update_users_department_in_db(excel_obj: dict[str, DataFrame]):
@@ -362,26 +373,13 @@ async def test():
     res = await sync_comments(g_tasks, sync_mode)
     return res, err, stop
 
-# Function that generates a predicate based on min and max values
-
-
-def status_in_range(min_status, max_status):
-    def predicate(task):
-        status = task.get('Status')
-        return min_status < status < max_status
-    return predicate
-
-
-def filter_g_tasks(g_tasks_in_progress: list[dict], value, _filter):
-    res = [value(g) for g in g_tasks_in_progress if _filter(g)]
-    return res
-
 
 async def main():
-    utils.setup_logging()
+    config = utils.ConfigObject
+    logging_level = config.get('Settings', 'logging_level', fallback="INFO")
+    utils.setup_logging(logging_level)
     logging.info(
         "-------------------- APPLICATION STARTED --------------------")
-    config = utils.ConfigObject
 
     chars = '"\''
 
@@ -406,19 +404,21 @@ async def main():
             return
 
     await update_db(queue)
-    # Start sync_services in the background and run every N minutes
+
     info_settings = (
-        f"Settings used in config:sync_mode: {sync_mode}; queue: {queue}; board_id: {board_id}; "
+        f"Settings used in config: logging_level: {logging_level}; "
+        f"sync_mode: {sync_mode}; queue: {queue}; board_id: {board_id}; "
         f"to_get_followers: {to_get_followers}; use_summaries: {use_summaries}; "
         f"interval_minutes: {interval_minutes}")
     logging.info(info_settings)
+
     await run_sync_services_periodically(
         queue, sync_mode, board_id, to_get_followers,
         use_summaries=use_summaries,
         interval_minutes=interval_minutes)
 
 
-def db_init(db_url):
+def db_init(db_url: str):
     db.set_db_url(db_url)
 
 
@@ -435,14 +435,20 @@ async def update_db(queue: str) -> None:
 
 async def update_db_from_excel_data() -> None:
     logging.info('Checking updates in database (Excel data)...')
+
     excel_bytes = await yapi.download_file_from_yandex_disk(path=yc.path_to_excel)
+    if excel_bytes is None:
+        logging.error('Error occured while downloading excel file...')
+        return
+
     excel_obj = utils.read_excel_from_bytes(excel_bytes)
     if excel_obj is None:
         logging.error('Error occured while reading excel file...')
         return
-    deps_updated = await update_users_department_in_db(excel_obj)
+
+    departments_updated = await update_users_department_in_db(excel_obj)
     users_updated = await update_it_users_in_db(excel_obj)
-    if deps_updated or users_updated:
+    if departments_updated or users_updated:
         utils.EXCEL_UPDATED_IN_YANDEX_DISK = True
     else:
         utils.EXCEL_UPDATED_IN_YANDEX_DISK = False
@@ -492,19 +498,37 @@ async def add_tasks(queue, use_summaries, g_tasks_in_progress_or_waiting, y_task
     return tasks_added
 
 
-def get_not_closed_task_ids(use_summaries, y_tasks):
-    not_closed_task_ids = {}
+def get_not_closed_task_ids(
+        use_summaries: bool,
+        y_tasks: list[dict[str, str]]
+) -> dict[str, str]:
+    """
+    Extracts task IDs for Yandex tasks that are not closed.
+
+    :param use_summaries: Boolean indicating whether to extract task IDs from summaries.
+    :param y_tasks: List of Yandex task dictionaries containing task information.
+    :return: A dictionary with task IDs as keys and Yandex task keys as values.
+    """
+    not_closed_task_ids: dict[str, str] = {}
     if use_summaries:
         not_closed_task_ids = utils.extract_task_ids_from_summaries(y_tasks)
+
     not_closed_task_ids_2 = utils.extract_task_ids_from_gandiva_task_id(
         y_tasks, yc.fid_gandiva_task_id)
     not_closed_task_ids.update(not_closed_task_ids_2)
+
     return not_closed_task_ids
 
 
 async def handle_tasks(
-        sync_mode, to_get_followers, use_summaries, g_tasks_all,
-        g_tasks_in_progress, g_tasks_waiting, y_tasks):
+        sync_mode: int,
+        to_get_followers: bool,
+        use_summaries: bool,
+        g_tasks_all: list[dict[str, Any]],
+        g_tasks_in_progress: list[dict[str, Any]],
+        g_tasks_waiting: list[dict[str, Any]],
+        y_tasks: list[dict[str, str]]
+) -> None:
     await yapi.batch_move_tasks_status(g_tasks_all, y_tasks)
     await yapi.edit_tasks(g_tasks_in_progress, y_tasks, to_get_followers, use_summaries)
     await yapi.edit_tasks(
