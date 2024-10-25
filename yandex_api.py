@@ -111,13 +111,13 @@ async def refresh_access_token(refresh_token: str | None = None) -> str | None:
         "POST", yc.oauth_token_url, headers=headers, body=body_url_encoded)
     if response is None:
         logging.error("Failed to refresh access token.")
-        return None
+        return
 
     access_token: str | None = response.get('access_token')
     new_refresh_token: str | None = response.get('refresh_token')
     if not (access_token and new_refresh_token):
         logging.error("Failed to retrieve access token.")
-        return None
+        return
 
     yc.oauth_token = access_token
     yc.oauth_refresh_token = new_refresh_token
@@ -130,12 +130,12 @@ async def check_access_token(access_token: str) -> None:
 
     if isinstance(account_info, dict) and account_info:
         logging.info(f"Authorized user: {account_info['login']}")
-        return None
+        return
 
     new_access_token = await refresh_access_token()
     if new_access_token is None:
         logging.error("Failed to refresh access token.")
-        return None
+        return
     return await check_access_token(new_access_token)
 
 
@@ -159,7 +159,7 @@ async def get_access_token_via_captcha() -> str | None:
         return response_json.get("access_token")
 
     logging.error("Failed to retrieve access token. Please try again.")
-    return None
+    return
 
 
 # Utils specific to Yandex
@@ -207,13 +207,13 @@ async def g_to_y_fields(
     initiator: dict[str, str] | None = g_task.get("Initiator")
     if not isinstance(initiator, dict):
         logging.error(f"Initiator is empty in task {g_task_id}!")
-        return None
+        return
 
     initiator_first_name = initiator.get("FirstName")
     initiator_second_name = initiator.get("LastName")
     if not initiator_first_name or not initiator_second_name:
         logging.error(f"Initiator is empty in task {g_task_id}!")
-        return None
+        return
 
     initiator_name = f"{initiator_first_name} {initiator_second_name}"
     description = utils.html_to_yandex_format(g_task["Description"])
@@ -259,7 +259,7 @@ async def get_nd_by_department(
         department_name: str | None
 ) -> str | None:
     if not department_name:
-        return None
+        return
     db_session = db.get_db_session()
     return db.get_nd_by_department_name(session=db_session, department_name=department_name)
 
@@ -269,11 +269,11 @@ async def get_y_assignee_id(
 ) -> str | None:
     """Retrieve Yandex assignee ID from Gandiva assignee."""
     if not g_assignee:
-        return None
+        return
 
     g_assignee_id = g_assignee.get('Id')
     if not g_assignee_id:
-        return None
+        return
     g_assignee_id = str(g_assignee_id)
 
     db_session = db.get_db_session()
@@ -423,11 +423,11 @@ async def get_page_of_tasks(
         logging.error(
             f"Failed to get page of tasks with query: {body} and page number: {page_number}."
         )
-        return None
+        return
 
     if not isinstance(response, list):
         logging.error(f"Got type: {type(response)}; list expected")
-        return None
+        return
 
     logging.debug(f"Page of tasks fetched.")
     return response
@@ -459,7 +459,7 @@ async def get_tasks_count(
 
     if not (response and isinstance(response, int)):
         logging.error(f"Tasks with query: {body} were not found.")
-        return None
+        return
 
     return response
 
@@ -510,7 +510,7 @@ async def get_tasks_by_gandiva_ids(g_ids: list[str]) -> dict[str, Any] | None:
     )
     if not (response and isinstance(response, dict)):
         logging.error(f"Failed to get tasks with Gandiva IDs: {g_ids}")
-        return None
+        return
 
     return response
 
@@ -526,7 +526,7 @@ async def get_page_of_users(
     response = await perform_http_request("GET", url, headers=yc.headers)
     if not (response and isinstance(response, list)):
         logging.error(f"Failed to get users.")
-        return None
+        return
 
     return response
 
@@ -560,7 +560,7 @@ async def get_task(y_task_id: str) -> dict[str, Any] | None:
     response = await perform_http_request("GET", url, headers=yc.headers)
     if not (response and isinstance(response, dict)):
         logging.error(f"Failed to get task {y_task_id}.")
-        return None
+        return
 
     return response
 
@@ -621,13 +621,13 @@ async def add_task(
 
     if not (response and isinstance(response, dict)):
         logging.error(f"Failed to add task {g_task_id}")
-        return None
+        return
     task_id_yandex = response.get('key')
 
     if not task_id_yandex:
         logging.error(
             f"Failed to retrieve task key from response for task {g_task_id}")
-        return None
+        return
 
     db.add_or_update_task(session=db_session,
                           g_task_id=g_task_id, y_task_id=task_id_yandex)
@@ -709,7 +709,7 @@ def edit_field_if_empty(
     """
     if new_value and not y_task.get(field_id):
         return new_value
-    return None
+    return
 
 
 def edit_field_if_different_content(
@@ -725,7 +725,7 @@ def edit_field_if_different_content(
     """
     if y_task.get(field_id) and new_value != y_task.get(field_id):
         return new_value
-    return None
+    return
 
 
 async def update_task_if_needed(
@@ -764,7 +764,7 @@ async def update_task_if_needed(
         y_task, yc.fid_initiator_department, initiator_department)
     edit_yandex_start_date = edit_field_if_empty(y_task, 'start', y_start_date)
     edit_gandiva_task_id = edit_field_if_empty(
-        y_task, yc.fid_gandiva, g_task_id)
+        y_task, yc.fid_gandiva_task_id, g_task_id)
     edit_gandiva = edit_field_if_empty(y_task, yc.fid_gandiva, gandiva)
     edit_nd = edit_field_if_empty(y_task, yc.fid_nd, nd)
     y_date_created_in_g = edit_field_if_empty(
@@ -827,7 +827,7 @@ def determine_followers(
     """Determine if followers need to be updated."""
 
     if not new_followers:
-        return None
+        return
 
     current_followers = y_task.get('followers', [])
     return new_followers if len(current_followers) < len(new_followers) else None
@@ -907,7 +907,7 @@ def assign_new_analyst(
             and g_contractor_id in [None, gapi.gc.waiting_analyst_id]
         ):
             return analyst
-    return None
+    return
 
 
 def create_y_tasks_dict(
@@ -968,7 +968,7 @@ async def edit_tasks(
         fields: dict[str, Any] | None = await g_to_y_fields(g_task, edit=True, to_get_followers=to_get_followers)
         if not isinstance(fields, dict):
             logging.error("Fields is None, dict expected!")
-            return None
+            return
 
         initiator_name: str | None = fields.get('initiator_name')
         if not initiator_name:
@@ -1029,7 +1029,7 @@ async def description_with_attachments(
 
     g_task_detailed: dict[str, Any] | None = await gapi.get_task(g_task_id)
     if not isinstance(g_task_detailed, dict):
-        return None
+        return
 
     attachments_text: str = utils.format_attachments(
         g_task_detailed.get('Attachments', []))
@@ -1148,7 +1148,7 @@ async def move_tasks_status(
 
     if not (response and isinstance(response, dict)):
         logging.error(f"Failed to move tasks to status {new_status}.")
-        return None
+        return
 
     logging.info(f"Moved {len(task_keys)} tasks to status {new_status}.")
     return response
@@ -1170,16 +1170,18 @@ async def move_status_task_groups(
 async def batch_move_tasks_status(
         g_tasks: list[dict[str, Any]],
         y_tasks: list[dict[str, Any]],
-        should_filter: bool = True
+        prevent_status_going_back: bool = True
 ) -> None:
     """Batch moves tasks to their updated statuses based on grouping."""
 
-    grouped_tasks: dict[str, list[dict[str, Any]]] = group_tasks_by_status(
+    grouped_tasks = group_tasks_by_status(
         g_tasks,
         y_tasks,
-        to_filter=should_filter
+        prevent_status_going_back=prevent_status_going_back
     )
-    await move_status_task_groups(grouped_tasks)
+
+    if grouped_tasks:
+        await move_status_task_groups(grouped_tasks)
     logging.info("Task statuses are up-to-date!")
 
 
@@ -1191,11 +1193,11 @@ async def batch_edit_tasks(
 
     if not task_ids:
         logging.warning("No task IDs provided for bulk update.")
-        return None
+        return
 
     if not values:
         logging.warning("No values provided for bulk update.")
-        return None
+        return
 
     url = f"{yc.api_host}/v2/bulkchange/_update"
 
@@ -1415,7 +1417,7 @@ async def add_comment(
 
     if not response:
         logging.error(f"Comment was not added to task {y_task_id}.")
-        return None
+        return
 
     logging.debug(f"Comment was successfully added to task {y_task_id}!")
     return response
@@ -1461,7 +1463,7 @@ async def edit_comment(
 
     if not (response and isinstance(response, dict)):
         logging.error(f"Comment was not edited in task {y_task_id}.")
-        return None
+        return
 
     logging.debug(f"Comment was successfully edited in task {y_task_id}!")
     return response
@@ -1489,7 +1491,7 @@ async def remove_followers_in_tasks(
 
     if not (response and isinstance(response, dict)):
         logging.error(f"Followers were not removed from tasks: {y_task_ids}.")
-        return None
+        return
 
     logging.debug(
         f"Followers were successfully removed from tasks: {y_task_ids}!")
@@ -1499,11 +1501,10 @@ async def remove_followers_in_tasks(
 def group_tasks_by_status(
         g_tasks: list[dict[str, Any]],
         y_tasks: list[dict[str, Any]],
-        to_filter: bool = True
+        prevent_status_going_back: bool = True
 ) -> dict[str, list[dict[str, Any]]]:
     """Groups tasks by their current Gandiva status with optional filtering."""
     grouped_tasks: dict[str, list[dict[str, Any]]] = {}
-
     for gandiva_task in g_tasks:
         g_task_id = gandiva_task['Id']
         g_status = gandiva_task['Status']
@@ -1512,28 +1513,29 @@ def group_tasks_by_status(
         if not yandex_task:
             continue
 
-        g_status_step, y_status_step = map_task_status_steps(
-            g_status, yandex_task)
-        g_status_step = adjust_status_if_needed(gandiva_task, g_status_step)
+        new_y_step, current_y_step = map_task_status_steps(
+            g_status, yandex_task
+        )
+        new_y_step = adjust_status_if_needed(gandiva_task, new_y_step)
 
-        if to_filter and g_status_step <= y_status_step:
+        if prevent_status_going_back and new_y_step <= current_y_step:
             continue
 
-        group_task_by_status(gandiva_task, yandex_task, grouped_tasks)
+        group_task_by_status(new_y_step, yandex_task, grouped_tasks)
 
     return grouped_tasks
 
 
 def find_matching_yandex_task(
         yandex_tasks: list[dict[str, Any]],
-        gandiva_task_id: str
+        gandiva_task_id: str | int
 ) -> dict[str, Any] | None:
     """Finds the corresponding Yandex task based on Gandiva task ID."""
     return next(
         (
             task
             for task in yandex_tasks
-            if task.get(yc.fid_initiator_department) == str(gandiva_task_id)
+            if task.get(yc.fid_gandiva_task_id) == str(gandiva_task_id)
         ),
         None
     )
@@ -1559,10 +1561,14 @@ def map_task_status_steps(
     if not yandex_status:
         return 0, 0
 
-    g_step = utils.y_status_to_step(yandex_status)
-    y_step = utils.y_status_to_step(y_key)
+    new_step = utils.y_status_to_step(yandex_status)
+    current_step = utils.y_status_to_step(y_key)
 
-    return (g_step, y_step) if g_step is not None and y_step is not None else (0, 0)
+    return (
+        (new_step, current_step)
+        if new_step is not None and current_step is not None
+        else (0, 0)
+    )
 
 
 def adjust_status_if_needed(
@@ -1570,6 +1576,12 @@ def adjust_status_if_needed(
         g_status_step: int
 ) -> int:
     """Adjusts the Gandiva status step based on specific conditions."""
+
+    status_waiting_analyst = 2
+    status_writing_spec = 3
+    status_programming = 7
+    in_work = g_status_step == status_writing_spec
+
     waiting_analyst_id = gapi.gc.waiting_analyst_id
 
     contractor = gandiva_task.get('Contractor')
@@ -1581,17 +1593,33 @@ def adjust_status_if_needed(
         return g_status_step
 
     contractor_id = str(contractor_id)
-    writing_spec = 3
+
     if (
-        g_status_step == writing_spec
-        and contractor_id
-        and contractor_needs_adjustment(contractor_id, waiting_analyst_id)
+        in_work
+        and contractor_not_assigned_or_waiting(contractor_id, waiting_analyst_id)
     ):
-        g_status_step = 2
+        return status_waiting_analyst
+
+    if in_work:
+        db_session = db.get_db_session()
+
+        user = db.get_user_by_gandiva_id(db_session, contractor_id)
+        if not user:
+            logging.warning(
+                f"User not found in Yandex Tracker, should be {contractor}")
+            return status_programming
+
+        y_contractor_id = user.yandex_user_id
+        y_contractor_id = str(y_contractor_id)
+        if db.is_user_analyst(db_session, y_contractor_id):
+            return status_writing_spec
+        else:
+            return status_programming
+
     return g_status_step
 
 
-def contractor_needs_adjustment(
+def contractor_not_assigned_or_waiting(
         contractor_id: str,
         waiting_analyst_id: str
 ) -> bool:
@@ -1607,14 +1635,13 @@ def contractor_needs_adjustment(
 
 
 def group_task_by_status(
-        gandiva_task: dict[str, Any],
+        y_step: int,
         yandex_task: dict[str, Any],
         grouped_tasks: dict[str, list[dict[str, Any]]]
 ) -> None:
     """Groups the task by its Gandiva status."""
-    g_status = str(gandiva_task.get('Status'))
 
-    y_status = utils.g_to_y_status(g_status)
+    y_status = utils.y_step_to_status(str(y_step))
     if not y_status:
         return
 
@@ -1674,7 +1701,7 @@ async def handle_in_work_but_waiting_for_analyst(
         return True
 
     for y_task in y_tasks:
-        g_task_id: str | None = y_task.get(yc.fid_initiator_department)
+        g_task_id: str | None = y_task.get(yc.fid_gandiva_task_id)
 
         if not (g_task_id in cursed_g_task_ids and g_task_id):
             continue

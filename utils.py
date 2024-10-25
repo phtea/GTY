@@ -97,7 +97,7 @@ def extract_task_keys(
 ) -> list[str] | None:
     task_keys = [str(task.get('key')) for task in tasks if 'key' in task]
     if not task_keys:
-        return None
+        return
     return task_keys
 
 
@@ -107,7 +107,7 @@ def extract_task_ids(
     """Extracts the 'ID' values from a list of tasks."""
     task_ids = [str(task.get('Id')) for task in tasks if 'Id' in task]
     if not task_ids:
-        return None
+        return
     return task_ids
 
 
@@ -347,7 +347,7 @@ async def perform_http_request(
     allowed_methods = {'GET', 'POST', 'PUT', 'PATCH', 'DELETE'}
     if method.upper() not in allowed_methods:
         logging.error(f"Invalid HTTP method: {method}")
-        return None
+        return
 
     try:
         if session is None:
@@ -358,7 +358,7 @@ async def perform_http_request(
 
     except Exception as e:
         logging.error(f"Exception during request to {url}: {str(e)}")
-        return None
+        return
 
 
 async def _make_request(
@@ -384,7 +384,7 @@ async def _make_request(
 
         logging.error(
             f"Request to {url} failed with status {status_code}: {response.reason}")
-        return None
+        return
 
 
 def data_handler_factory(
@@ -640,7 +640,7 @@ def extract_task_id_from_summary(
     if match:
         return match.group(1)  # Return the matched task ID
     else:
-        return None
+        return
 
 
 def extract_task_ids_from_summaries(
@@ -919,7 +919,7 @@ def read_excel_from_bytes(
         return pd.read_excel(excel_io, sheet_name=None)  # type: ignore
     except Exception as e:
         print(f"Error reading Excel from bytes: {e}")
-        return None
+        return
 
 
 def extract_department_analysts_from_excel(
