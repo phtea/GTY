@@ -688,7 +688,7 @@ async def add_tasks(
             date_created_in_g=fields.get('date_created_in_g')
         )
 
-        if result is not None:
+        if isinstance(result, dict):
             logging.info(f"Added task {g_task_id}")
             added_task_count += 1
 
