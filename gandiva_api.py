@@ -1,16 +1,20 @@
-from typing import Callable, Awaitable, Any, TypeVar
-from functools import wraps
 import asyncio
+import json
 import logging
 import urllib.parse
-import json
-from utils import perform_http_request
-import db_module as db
-import utils
 from datetime import datetime, timedelta, timezone
 from configparser import ConfigParser
-from typing import Callable, Awaitable, Any
+from functools import wraps
+from typing import Callable, Awaitable, Any, TypeVar
+
+# SQLAlchemy Imports
 from sqlalchemy.orm import Session
+
+# Project-Specific Modules
+import db_module as db
+from utils import perform_http_request
+from utils import get_config
+from utils import get_next_year_datetime
 
 
 class GandivaConfig:
@@ -64,8 +68,7 @@ class GandivaTokens:
                 timezone.utc) + timedelta(seconds=expires_in)
 
 
-# Initialize configurations and tokens
-gc = GandivaConfig(utils.ConfigObject)
+gc = GandivaConfig(get_config())
 gt = GandivaTokens()
 
 
@@ -667,7 +670,7 @@ async def handle_no_contractor_or_waiting_for_analyst(
     or the contractor is the waiting analyst and there's no 
     required start date set. This function attempts to fix these anomalies.
     """
-    next_year_start_date = utils.get_next_year_datetime()
+    next_year_start_date = get_next_year_datetime()
     waiting_analyst_id = gc.waiting_analyst_id
 
     anomalous_tasks = filter_anomalous_tasks(tasks, waiting_analyst_id)

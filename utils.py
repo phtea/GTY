@@ -1,17 +1,19 @@
 import io
-import pandas as pd
-import csv
-from bs4 import BeautifulSoup, MarkupResemblesLocatorWarning
 import re
+import csv
 import logging
-from logging.handlers import RotatingFileHandler
-import aiohttp
-import datetime
 import warnings
-import markdown
+import datetime
 import configparser
-from typing import Callable, Any, Union, Awaitable, Optional
+from typing import Callable, Any, Union, Awaitable
+from configparser import ConfigParser
+from logging.handlers import RotatingFileHandler
 
+# Third-Party Libraries
+import pandas as pd
+import aiohttp
+import markdown
+from bs4 import BeautifulSoup, MarkupResemblesLocatorWarning
 
 ResponseType = str | dict[str, Any] | bytes | bool | None
 
@@ -23,7 +25,9 @@ YANDEX_HOST = "https://tracker.yandex.ru"
 EXCEL_UPDATED_IN_YANDEX_DISK = False
 
 
-def setup_logging(logging_level: str):
+def setup_logging(
+        logging_level: str
+) -> None:
     """Sets up logging with a rotating file handler."""
     handler = create_rotating_file_handler()
     handler.setFormatter(create_log_formatter())
@@ -34,7 +38,10 @@ def setup_logging(logging_level: str):
     set_logging_level(logging_level, logger)
 
 
-def set_logging_level(logging_level: str, logger: logging.Logger):
+def set_logging_level(
+        logging_level: str,
+        logger: logging.Logger
+) -> None:
     """
     Sets the logging level of the given logger.
 
@@ -79,18 +86,24 @@ def create_log_formatter() -> logging.Formatter:
     return logging.Formatter(log_format)
 
 
-def y_status_to_y_transition(transition: str):
+def y_status_to_y_transition(
+        transition: str
+) -> str:
     return transition + "Meta"
 
 
-def extract_task_keys(tasks: list[dict[str, str]]) -> Optional[list[str]]:
+def extract_task_keys(
+        tasks: list[dict[str, str]]
+) -> list[str] | None:
     task_keys = [str(task.get('key')) for task in tasks if 'key' in task]
     if not task_keys:
         return None
     return task_keys
 
 
-def extract_task_ids(tasks: list[dict[str, str]]) -> Optional[list[str]]:
+def extract_task_ids(
+        tasks: list[dict[str, str]]
+) -> list[str] | None:
     """Extracts the 'ID' values from a list of tasks."""
     task_ids = [str(task.get('Id')) for task in tasks if 'Id' in task]
     if not task_ids:
@@ -98,7 +111,9 @@ def extract_task_ids(tasks: list[dict[str, str]]) -> Optional[list[str]]:
     return task_ids
 
 
-def y_status_to_step(y_status: str) -> int | None:
+def y_status_to_step(
+        y_status: str
+) -> int | None:
     status_to_step = {
         "open": 0,
         "onenew": 1,
@@ -121,7 +136,9 @@ def y_status_to_step(y_status: str) -> int | None:
     return status_to_step.get(y_status)
 
 
-def y_step_to_status(y_step: str) -> str | None:
+def y_step_to_status(
+        y_step: str
+) -> str | None:
     step_to_status = {
         "0": "open",
         "1": "onenew",
@@ -144,7 +161,9 @@ def y_step_to_status(y_step: str) -> str | None:
     return step_to_status.get(y_step)
 
 
-def get_y_transition_from_g_status(g_status: str) -> str | None:
+def get_y_transition_from_g_status(
+        g_status: str
+) -> str | None:
     status_to_transition = {
         "3": "onenewMeta",
         "4": "fourinformationrequiredMeta",
@@ -161,7 +180,9 @@ def get_y_transition_from_g_status(g_status: str) -> str | None:
     return status_to_transition.get(g_status)
 
 
-def g_to_y_status(g_status: int | str) -> str | None:
+def g_to_y_status(
+        g_status: int | str
+) -> str | None:
     """Converts a Gandiva status to a corresponding Yandex status.
 
     Logs the error (when key is missing)"""
@@ -188,12 +209,21 @@ def g_to_y_status(g_status: int | str) -> str | None:
     return y_status
 
 
-def extract_text_from_html(html: str) -> str:
+def extract_text_from_html(
+        html: str
+) -> str:
+    """Extracts plain text from an HTML document.
+
+    :param html: The HTML document to extract text from
+    :return: The extracted text
+    """
     soup = BeautifulSoup(html, "html.parser")
     return soup.get_text()
 
 
-def html_to_yandex_format(html: str) -> str:
+def html_to_yandex_format(
+        html: str
+) -> str:
     """Converts HTML content to a Yandex-friendly text format."""
     soup = BeautifulSoup(html, "html.parser")
 
@@ -206,13 +236,17 @@ def html_to_yandex_format(html: str) -> str:
     return soup.get_text().strip()
 
 
-def replace_breaks_with_newlines(soup: BeautifulSoup) -> None:
+def replace_breaks_with_newlines(
+        soup: BeautifulSoup
+) -> None:
     """Replaces <br> tags with newlines in the soup object."""
     for br in soup.find_all("br"):
         br.replace_with("\n")
 
 
-def convert_links_to_markdown(soup: BeautifulSoup) -> None:
+def convert_links_to_markdown(
+        soup: BeautifulSoup
+) -> None:
     """Converts <a> tags to markdown-style links."""
     for a in soup.find_all("a"):
         href = a.get('href', '')
@@ -221,17 +255,23 @@ def convert_links_to_markdown(soup: BeautifulSoup) -> None:
         a.replace_with(f"[{cleaned_text}]({href})")
 
 
-def prepend_host_if_relative(url: str) -> str:
+def prepend_host_if_relative(
+        url: str
+) -> str:
     """Prepends GANDIVA_HOST to the URL if it is a relative link."""
     return f"{GANDIVA_HOST}{url}" if not re.match(r'^https?://', url) else url
 
 
-def clean_link_text(text: str) -> str:
+def clean_link_text(
+        text: str
+) -> str:
     """Removes square brackets and strips spaces from the link text."""
     return re.sub(r'[\[\]]', '', text).strip()
 
 
-def replace_images_with_links(soup: BeautifulSoup) -> None:
+def replace_images_with_links(
+        soup: BeautifulSoup
+) -> None:
     """Replaces <img> tags with markdown-style image links."""
     img_count = 1
     for img in soup.find_all("img"):
@@ -241,13 +281,17 @@ def replace_images_with_links(soup: BeautifulSoup) -> None:
         img_count += 1
 
 
-def add_newlines_after_blocks(soup: BeautifulSoup) -> None:
+def add_newlines_after_blocks(
+        soup: BeautifulSoup
+) -> None:
     """Adds newlines after block-level elements like <p>."""
     for p in soup.find_all("p"):
         p.insert_after("\n")
 
 
-def markdown_to_html(markdown_text: str) -> str:
+def markdown_to_html(
+        markdown_text: str
+) -> str:
     """Converts markdown text to HTML format."""
     html_text = markdown.markdown(markdown_text)
     html_text = prepend_host_to_relative_links(html_text, YANDEX_HOST)
@@ -255,7 +299,10 @@ def markdown_to_html(markdown_text: str) -> str:
     return html_text
 
 
-def prepend_host_to_relative_links(html_text: str, host: str) -> str:
+def prepend_host_to_relative_links(
+        html_text: str,
+        host: str
+) -> str:
     """Prepend host to relative URLs in <a> and <img> tags."""
     soup = BeautifulSoup(html_text, "html.parser")
 
@@ -267,26 +314,34 @@ def prepend_host_to_relative_links(html_text: str, host: str) -> str:
     return str(soup)
 
 
-def convert_raw_urls_to_html(text: str) -> str:
+def convert_raw_urls_to_html(
+        text: str
+) -> str:
     """Convert raw URLs to HTML links."""
     url_pattern = r'(?<!["\'])\bhttps?://[^\s<>"]+'
     return re.sub(url_pattern, wrap_url_in_link, text)
 
 
-def wrap_url_in_link(match: re.Match[str]) -> str:
+def wrap_url_in_link(
+        match: re.Match[str]
+) -> str:
     """Wrap raw URL in an HTML link."""
     raw_url = match.group(0)
     return f'<a href="{raw_url}">{raw_url}</a>'
 
 
-def convert_gandiva_to_yandex_date(gandiva_date: str) -> str:
+def convert_gandiva_to_yandex_date(
+        gandiva_date: str
+) -> str:
     parsed_date = datetime.datetime.fromisoformat(gandiva_date)
     return parsed_date.strftime('%Y-%m-%d')
 
 
 async def perform_http_request(
-        method: str, url: str, headers: dict[str, str] | None = None,
-        body: str | None = None, session: aiohttp.ClientSession | None = None
+        method: str, url: str,
+        headers: dict[str, str] | None = None,
+        body: str | None = None,
+        session: aiohttp.ClientSession | None = None
 ) -> ResponseType:
 
     allowed_methods = {'GET', 'POST', 'PUT', 'PATCH', 'DELETE'}
@@ -307,8 +362,11 @@ async def perform_http_request(
 
 
 async def _make_request(
-        session: aiohttp.ClientSession, method: str,
-        url: str, headers: dict[str, str] | None = None, body: str | None = None
+        session: aiohttp.ClientSession,
+        method: str,
+        url: str,
+        headers: dict[str, str] | None = None,
+        body: str | None = None
 ) -> ResponseType:
     """Makes an HTTP request and returns the response data or status."""
 
@@ -349,7 +407,9 @@ async def parse_json_data(
         return text
 
 
-async def read_binary_data(response: aiohttp.ClientResponse) -> bytes:
+async def read_binary_data(
+        response: aiohttp.ClientResponse
+) -> bytes:
     response_data = await response.read()
     return response_data
 
@@ -369,7 +429,9 @@ MONTHS_RUSSIAN = {
 }
 
 
-def extract_department_analysts(csv_file: str) -> dict[str, dict[str, str]]:
+def extract_department_analysts(
+        csv_file: str
+) -> dict[str, dict[str, str]]:
     """Parses a CSV file to extract department names, activity directions, and analyst emails."""
 
     department_analyst_mapping: dict[str, dict[str, str]] = {}
@@ -416,7 +478,9 @@ def map_department_nd_to_user_id(
     return department_user_mapping
 
 
-def extract_it_users(csv_file_path: str) -> dict[str, str]:
+def extract_it_users(
+        csv_file_path: str
+) -> dict[str, str]:
     """
     Reads a CSV file at the given path and extracts a mapping
     of Yandex email addresses to Gandiva email addresses.
@@ -560,7 +624,9 @@ def map_it_uids_to_g_ids(
     return mapped_ids
 
 
-def extract_task_id_from_summary(summary: str) -> Optional[str]:
+def extract_task_id_from_summary(
+        summary: str
+) -> str | None:
     """
     Extracts a task ID from a single summary string.
 
@@ -609,7 +675,8 @@ def extract_task_ids_from_summaries(
 
 
 def extract_gandiva_task_id_from_task(
-        task: dict[str, str], field_id_gandiva_task_id: str
+        task: dict[str, str],
+        field_id_gandiva_task_id: str
 ) -> str | None:
     """
     Extracts the Gandiva task ID from a single task dictionary.
@@ -706,7 +773,10 @@ def extract_observers_from_detailed_task(
     return observer_ids
 
 
-def task_exists_in_list(g_tasks: list[dict[str, Any]], task_id: str) -> bool:
+def task_exists_in_list(
+        g_tasks: list[dict[str, Any]],
+        task_id: str
+) -> bool:
     """
     Check if a task with the specified ID exists in the list of tasks.
 
@@ -718,14 +788,25 @@ def task_exists_in_list(g_tasks: list[dict[str, Any]], task_id: str) -> bool:
 
 
 def g_addressee_exists(
-    addressees: list[dict[str, dict[str, str]]], addressee_id: str
-) -> bool | None:
+    addressees: list[dict[str, dict[str, str]]],
+    addressee_id: str
+) -> bool:
+    """
+    Check if an addressee with the given ID exists in the list of addressees.
+
+    :param addressees: List of addressee dictionaries, each containing a "User" field
+                      with an "Id" field.
+    :param addressee_id: The ID of the addressee to search for.
+    :return: True if the addressee exists, False otherwise.
+    """
     if not addressee_id:
-        return None
+        return False
     return any(addressee['User']['Id'] == addressee_id for addressee in addressees)
 
 
-def remove_mentions(text: str) -> str:
+def remove_mentions(
+        text: str
+) -> str:
     """
     Removes @xxxxx mentions from the given text.
 
@@ -736,7 +817,8 @@ def remove_mentions(text: str) -> str:
 
 
 def id_in_summonees_exists(
-    y_author_id: str, y_summonees: list[dict[str, str | None]]
+    y_author_id: str,
+    y_summonees: list[dict[str, str | None]]
 ) -> bool:
     """
     Check if y_author_id is present in the 'id' field of summonees.
@@ -778,14 +860,19 @@ def extract_existing_comments_from_gandiva(
     return existing_g_comments, comment_texts_in_gandiva
 
 
-def is_g_comment_author_this(g_comment: dict[str, Any], author_id: str) -> bool:
+def is_g_comment_author_this(
+        g_comment: dict[str, Any],
+        author_id: str
+) -> bool:
     author: dict[str, Any] | None = g_comment.get('Author')
     return bool(author
                 and (id := author.get('Id'))
                 and id == author_id)
 
 
-def format_attachments(g_attachments: list[dict[str, Any]]) -> str:
+def format_attachments(
+        g_attachments: list[dict[str, Any]]
+) -> str:
     """
     Formats a list of attachments into a string with numbered links.
 
@@ -824,7 +911,9 @@ def get_next_year_datetime() -> str:
     return next_year_datetime
 
 
-def read_excel_from_bytes(excel_bytes: bytes) -> dict[str, pd.DataFrame] | None:
+def read_excel_from_bytes(
+        excel_bytes: bytes
+) -> dict[str, pd.DataFrame] | None:
     try:
         excel_io = io.BytesIO(excel_bytes)
         return pd.read_excel(excel_io, sheet_name=None)  # type: ignore
@@ -866,18 +955,9 @@ def extract_department_analysts_from_excel(
     return department_analyst_dict
 
 
-def normalize_department_name(department_name: str) -> str:
-    """
-    Normalizes a department name by replacing non-breaking spaces 
-    and multiple consecutive spaces with a single space.
-
-    :param department_name: The department name to normalize.
-    :return: A normalized department name with single spaces.
-    """
-    return re.sub(r'\s+', ' ', department_name.replace('\u00A0', ' ')).strip()
-
-
-def load_config(path: str) -> configparser.ConfigParser:
+def load_config(
+        path: str
+) -> configparser.ConfigParser:
     """
     Loads and returns a configuration from the specified file path.
 
@@ -890,3 +970,7 @@ def load_config(path: str) -> configparser.ConfigParser:
 
 
 ConfigObject = load_config('config.ini')
+
+
+def get_config() -> ConfigParser:
+    return ConfigObject

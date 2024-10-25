@@ -1,16 +1,19 @@
-import logging
-import json
 import asyncio
-import gandiva_api as gapi
 import datetime
-import utils
-from utils import perform_http_request
-import db_module as db
-from db_module import Task
-import urllib.parse
+import json
+import logging
 import re
+import urllib.parse
 from configparser import ConfigParser
 from typing import Any
+
+# Project-Specific Modules
+import db_module as db
+from db_module import Task
+import utils
+from utils import perform_http_request
+from common_utils import normalize_department_name
+import gandiva_api as gapi
 
 
 class YandexConfig:
@@ -252,14 +255,18 @@ async def g_to_y_fields(
     )
 
 
-async def get_nd_by_department(department_name: str | None) -> str | None:
+async def get_nd_by_department(
+        department_name: str | None
+) -> str | None:
     if not department_name:
         return None
     db_session = db.get_db_session()
     return db.get_nd_by_department_name(session=db_session, department_name=department_name)
 
 
-async def get_y_assignee_id(g_assignee: dict[str, Any] | None) -> str | None:
+async def get_y_assignee_id(
+        g_assignee: dict[str, Any] | None
+) -> str | None:
     """Retrieve Yandex assignee ID from Gandiva assignee."""
     if not g_assignee:
         return None
@@ -740,7 +747,7 @@ async def update_task_if_needed(
     Check which fields need to be updated and call edit_task if any updates are necessary.
     """
     y_task_id: str = y_task.get('key', '')
-    initiator_department = utils.normalize_department_name(
+    initiator_department = normalize_department_name(
         initiator_department) if initiator_department else None
 
     # Determine fields to edit
@@ -887,16 +894,19 @@ def assign_new_analyst(
         analyst = db.get_user_id_by_department(
             session=db_session, department_name=initiator_department
         )
-        if analyst:
-            if utils.EXCEL_UPDATED_IN_YANDEX_DISK:
-                # Check if content is different
-                if current_analyst_id != analyst:
-                    return analyst
-            else:
-                # Check if empty or waiting for analyst
-                if (not current_analyst_id and
-                        g_contractor_id in [None, gapi.gc.waiting_analyst_id]):
-                    return analyst
+        if not analyst:
+            return
+
+        if utils.EXCEL_UPDATED_IN_YANDEX_DISK:
+            content_is_different = current_analyst_id != analyst
+            if content_is_different:
+                return analyst
+
+        if (
+            not current_analyst_id
+            and g_contractor_id in [None, gapi.gc.waiting_analyst_id]
+        ):
+            return analyst
     return None
 
 
@@ -1048,8 +1058,6 @@ async def edit_task(
     """Edits a Yandex task's attributes."""
 
     y_task_id = str(y_task_id)
-    if not g_task_id:
-        g_task_id = None
 
     body: dict[str, Any] = {k: v for k, v in {  # type: ignore
         "summary": summary,
@@ -1065,11 +1073,13 @@ async def edit_task(
         yc.fid_nd: nd,
         yc.fid_date_created_in_g: date_created_in_g,
         yc.fid_analyst: analyst,
+        yc.fid_gandiva_task_id: g_task_id,
         "start": start,
         yc.fid_gandiva: gandiva
     }.items() if v is not None}
 
-    body[yc.fid_gandiva_task_id] = g_task_id
+    if g_task_id == '':
+        body[yc.fid_gandiva_task_id] = None
 
     body_json = json.dumps(body)
     url = f"{yc.api_host}/v2/issues/{y_task_id}"
