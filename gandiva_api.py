@@ -123,7 +123,7 @@ def token_refresh_decorator(func: _FuncType) -> _FuncType:
             new_token = await get_access_token(gc.login, gc.password)
             if new_token is None:
                 logging.error("Failed to retrieve access token.")
-                return None
+                return
 
         # Await the actual function only once, after confirming token validity
         return await func(*args, **kwargs)
@@ -150,7 +150,7 @@ async def get_access_token(login: str, password: str) -> str | None:
 
     if not response or not isinstance(response, dict):
         logging.error("Failed to retrieve access token.")
-        return None
+        return
 
     access_token = response.get('access_token')
     refresh_token = response.get('refresh_token')
@@ -158,7 +158,7 @@ async def get_access_token(login: str, password: str) -> str | None:
 
     if not (access_token and refresh_token and expires_in):
         logging.error("Failed to retrieve access token.")
-        return None
+        return
 
     gt.set_tokens(access_token, refresh_token, expires_in)
     logging.info(f"Authorized user: {login} [Gandiva]")
@@ -183,14 +183,14 @@ async def refresh_access_token(refresh_token: str) -> str | None:
     response = await perform_http_request("POST", url, headers=headers, body=body)
     if not isinstance(response, dict):
         logging.error("Failed to refresh access token.")
-        return None
+        return
 
     access_token = response.get('access_token')
     new_refresh_token = response.get('refresh_token')
     expires_in = response.get('expires_in')
     if not (access_token and new_refresh_token and expires_in):
         logging.error("Failed to retrieve access token.")
-        return None
+        return
 
     gt.set_tokens(access_token, new_refresh_token, expires_in)
     logging.info('Successfully refreshed Gandiva token')
@@ -214,7 +214,7 @@ async def get_task(
 
     task = await perform_http_request('GET', url, headers=get_headers(content_type=content_type))
     if not isinstance(task, dict):
-        return None
+        return
     return task
 
 
@@ -247,7 +247,7 @@ async def get_department_by_user_id(
         return department
 
     logging.error(f"Error fetching department for user {g_user_id}")
-    return None
+    return
 
 
 def cache_department(g_user_id: str, department: str) -> None:
@@ -308,7 +308,7 @@ async def get_page_of_tasks(
 
     if not (response and isinstance(response, dict)):
         logging.error(f"Failed to fetch page {page_number}")
-        return None
+        return
 
     logging.debug(f"Page {page_number} fetched.")
     return response
@@ -326,7 +326,7 @@ async def get_task_comments(g_task_id: int) -> list[dict[str, Any]] | None:
     response = await perform_http_request(method="GET", url=url, headers=get_headers())
     if not isinstance(response, list):
         logging.error(f"Failed to fetch comments for task {g_task_id}")
-        return None
+        return
 
     logging.debug(f"Found {len(response)} comments for task {g_task_id}.")
     return response
@@ -469,7 +469,7 @@ async def add_comment(
 
     if not (response and isinstance(response, dict)):
         logging.error(f"Comment was not added to task {g_task_id}.")
-        return None
+        return
 
     logging.debug(f"Comment was successfully added to task {g_task_id}!")
     return response
@@ -505,7 +505,7 @@ async def edit_comment(
         return response
 
     logging.error(f"Failed to edit comment {g_comment_id}.")
-    return None
+    return
 
 
 @token_refresh_decorator
@@ -542,7 +542,7 @@ async def edit_task(
         return response
 
     logging.error(f"Task {g_task_id} was not edited.")
-    return None
+    return
 
 
 @token_refresh_decorator
@@ -568,7 +568,7 @@ async def edit_task_required_start_date(
 
     if not (response and isinstance(response, dict)):
         logging.error(f"Task's RequiredStartDate {g_task_id} was not edited.")
-        return None
+        return
     logging.debug(
         f"Task's RequiredStartDate {g_task_id} was successfully edited!"
     )
@@ -607,7 +607,7 @@ async def edit_task_contractor(
 
     if not (response and isinstance(response, dict)):
         logging.error(f"Task's Contractor {g_task_id} was not edited.")
-        return None
+        return
 
     logging.debug(
         f"Task's Contractor {g_task_id} was successfully edited!")
@@ -632,7 +632,7 @@ async def delete_comment(
 
     if not (response and isinstance(response, dict)):
         logging.error(f"Comment [{g_comment_id}] was not deleted.")
-        return None
+        return
 
     logging.debug(f"Comment [{g_comment_id}] was successfully deleted!")
     return response

@@ -164,7 +164,7 @@ async def sync_task_comments(
 def extract_contractor_id(g_task: dict[str, Any]) -> str | None:
     contractor: dict[str, Any] | None = g_task.get('Contractor')
     if not contractor:
-        return None
+        return
     return contractor.get('Id')
 
 

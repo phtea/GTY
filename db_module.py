@@ -122,7 +122,7 @@ def get_task_by_gandiva_id(
             task_id_gandiva=g_task_id).one_or_none()
         return task
     except NoResultFound:
-        return None
+        return
 
 
 def get_task_by_yandex_id(
@@ -142,7 +142,7 @@ def get_task_by_yandex_id(
             task_id_yandex=task_id_yandex).one()
         return task
     except NoResultFound:
-        return None
+        return
 
 
 def update_database_schema(
@@ -263,13 +263,13 @@ def get_user_id_by_department(
 
         if not department:
             logging.warning(f"No user found for department: {department_name}")
-            return None
+            return
         return str(department.yandex_user_id)
 
     except Exception as e:
         logging.error(
             f"Error fetching user ID for department {department_name}: {e}")
-        return None
+        return
 
 
 def add_or_update_user(
@@ -397,7 +397,7 @@ def get_user_by_yandex_id(
     except Exception as e:
         logging.error(
             f"Error retrieving user by Yandex ID {y_user_id}: {str(e)}")
-        return None
+        return
 
 
 def get_user_by_gandiva_id(
@@ -412,7 +412,7 @@ def get_user_by_gandiva_id(
     except Exception as e:
         logging.error(
             f"Error retrieving user by Gandiva ID {g_user_id}: {str(e)}")
-        return None
+        return
 
 
 def get_nd_by_department_name(
@@ -426,13 +426,13 @@ def get_nd_by_department_name(
         department = session.query(Department).filter_by(
             department_name=department_name).one_or_none()
         if not department:
-            return None
+            return
         return str(department.nd)
 
     except Exception as e:
         logging.error(
             f"Error retrieving department by department_name {department_name}: {str(e)}")
-        return None
+        return
 
 
 def convert_gandiva_observers_to_yandex_followers(
