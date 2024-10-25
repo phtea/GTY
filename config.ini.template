@@ -7,6 +7,7 @@ board_id            = "10"
 interval_minutes    = 5
 to_get_followers    = False
 use_summaries       = False
+logging_level       = INFO
 
 [Gandiva]
 login                   = "login"
