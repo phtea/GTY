@@ -231,7 +231,8 @@ def add_user_department_nd_mapping(
 
         data_was_changed = (
             str(department.nd) != nd
-            or str(department.yandex_user_id) != y_user_id)
+            or str(department.yandex_user_id) != y_user_id
+        )
 
         if not data_was_changed:
             skipped_entries += 1
@@ -247,7 +248,7 @@ def add_user_department_nd_mapping(
     logging.info(
         f"{total_entries} mappings added/updated. {skipped_entries} entries skipped.")
 
-    return bool(total_entries)
+    return total_entries > 0
 
 
 def get_user_id_by_department(

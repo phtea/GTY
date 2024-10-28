@@ -670,7 +670,7 @@ async def add_tasks(
         if not y_status:
             continue
 
-        y_step = utils.y_status_to_step(y_status)
+        y_step = utils.y_status_to_id(y_status)
         if not y_step:
             continue
 
@@ -847,7 +847,7 @@ def determine_description(y_task: dict[str, Any], new_description: str | None) -
 def update_analyst_and_assignee(
     y_task: dict[str, Any],
     initiator_department: str | None,
-    y_step: int,
+    y_status_id: int,
     g_contractor_id: str | None,
     current_y_assignee: str | None,
     g_initiator_id: str,
@@ -865,28 +865,29 @@ def update_analyst_and_assignee(
     y_initiator_id = str(y_initiator.yandex_user_id) if y_initiator else None
 
     new_analyst_id: str | None = None
-    new_assignee_id: str | None = None
+    new_y_contractor_id: str | None = None
 
     if not y_initiator_id:
-        return new_analyst_id, new_assignee_id
+        return new_analyst_id, new_y_contractor_id
 
     if not db.is_user_analyst(session=db_session, yandex_user_id=y_initiator_id):
         new_analyst_id = assign_new_analyst(
             db_session, initiator_department, cur_y_analyst, g_contractor_id
         )
-        if new_analyst_id and y_step in [0, 1, 2] and current_y_assignee != new_analyst_id:
-            new_assignee_id = new_analyst_id
+        new_statuses_id = [0, 1, 2]
+        if new_analyst_id and y_status_id in new_statuses_id and current_y_assignee != new_analyst_id:
+            new_y_contractor_id = new_analyst_id
     else:
         if cur_y_analyst != y_initiator_id:
             new_analyst_id = y_initiator_id
 
-    return new_analyst_id, new_assignee_id
+    return new_analyst_id, new_y_contractor_id
 
 
 def assign_new_analyst(
     db_session: db.Session,
     initiator_department: str | None,
-    current_analyst_id: str | None,
+    current_y_analyst_id: str | None,
     g_contractor_id: str | None
 ) -> str | None:
     """Determine the new analyst ID based on the initiator's department and current conditions."""
@@ -898,12 +899,12 @@ def assign_new_analyst(
             return
 
         if utils.EXCEL_UPDATED_IN_YANDEX_DISK:
-            content_is_different = current_analyst_id != analyst
+            content_is_different = current_y_analyst_id != analyst
             if content_is_different:
                 return analyst
 
         if (
-            not current_analyst_id
+            not current_y_analyst_id
             and g_contractor_id in [None, gapi.gc.waiting_analyst_id]
         ):
             return analyst
@@ -993,7 +994,7 @@ async def edit_tasks(
         if not y_status:
             continue
 
-        y_step = utils.y_status_to_step(y_status)
+        y_step = utils.y_status_to_id(y_status)
         if y_step is None:
             logging.error(f"Invalid Yandex task status: {y_status}")
             continue
@@ -1561,8 +1562,8 @@ def map_task_status_steps(
     if not yandex_status:
         return 0, 0
 
-    new_step = utils.y_status_to_step(yandex_status)
-    current_step = utils.y_status_to_step(y_key)
+    new_step = utils.y_status_to_id(yandex_status)
+    current_step = utils.y_status_to_id(y_key)
 
     return (
         (new_step, current_step)
@@ -1641,7 +1642,7 @@ def group_task_by_status(
 ) -> None:
     """Groups the task by its Gandiva status."""
 
-    y_status = utils.y_step_to_status(str(y_step))
+    y_status = utils.y_id_to_status(str(y_step))
     if not y_status:
         return
 
@@ -1670,7 +1671,7 @@ async def handle_in_work_but_waiting_for_analyst(
         y_status = utils.g_to_y_status(g_status)
         if not (
             y_status
-            and utils.y_status_to_step(y_status) == writing_spec
+            and utils.y_status_to_id(y_status) == writing_spec
         ):
             continue
         contractor: int | str | None = g_task.get(

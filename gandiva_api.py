@@ -16,6 +16,8 @@ from utils import perform_http_request
 from utils import get_config
 from utils import get_next_year_datetime
 
+GTasks = dict[str, Any] | None
+
 
 class GandivaConfig:
     """Configuration class for Gandiva API."""
@@ -207,7 +209,7 @@ def get_headers(content_type: str = "application/json") -> dict[str, str]:
 @token_refresh_decorator
 async def get_task(
     g_task_id: str
-) -> dict[str, Any] | None:
+) -> GTasks:
     """Fetch a task by ID using the Gandiva API."""
     content_type = "application/x-www-form-urlencoded"
     url = f"{gc.host}/api/Requests/{g_task_id}"
@@ -284,7 +286,7 @@ async def get_departments_for_users(
 @token_refresh_decorator
 async def get_page_of_tasks(
     page_number: int, statuses: list[int]
-) -> dict[str, Any] | None:
+) -> GTasks:
     """Fetch a page of tasks."""
     url = f"{gc.host}/api/Requests/Filter"
     filter_data: dict[str, list[int]] = {
@@ -332,7 +334,10 @@ async def get_task_comments(g_task_id: int) -> list[dict[str, Any]] | None:
     return response
 
 
-def get_task_by_id_from_list(task_list: list[dict[str, Any]], task_id: str) -> dict[str, Any] | None:
+def get_task_by_id_from_list(
+        task_list: list[dict[str, Any]],
+        task_id: str
+) -> GTasks:
     """Retrieve a task from a list of tasks based on the given task_id."""
     return next((task for task in task_list if task.get('Id') == task_id), None)
 
@@ -446,7 +451,7 @@ async def add_comment(
     y_comment_id: str | None,
     author_name: str | None,
     g_addressees: list[str] | None = None
-) -> dict[str, Any] | None:
+) -> GTasks:
     """Fetch comments for a list of tasks one at a time."""
     url = f"{gc.host}/api/Requests/{g_task_id}/Comments"
     # Format the comment according to the specified template
@@ -482,7 +487,7 @@ async def edit_comment(
     text: str,
     author_name: str | None,
     g_addressees: list[str] | None = None
-) -> dict[str, Any] | None:
+) -> GTasks:
     """Edit a comment in Gandiva."""
     url = f"{gc.host}/api/Common/Comments/{g_comment_id}"
 
@@ -513,7 +518,7 @@ async def edit_task(
     g_task_id: int,
     last_modified_date: str,
     required_start_date: str | None = None
-) -> dict[str, Any] | None:
+) -> GTasks:
     """
     Edit task in Gandiva.
 
@@ -550,7 +555,7 @@ async def edit_task_required_start_date(
     g_task_id: str,
     last_modified_date: str,
     required_start_date: str
-) -> dict[str, Any] | None:
+) -> GTasks:
     """edit task in Gandiva"""
     url = f"{gc.host}/api/Requests/{g_task_id}/RequiredStartDate"
     body: dict[str, str] = {
@@ -580,7 +585,7 @@ async def edit_task_contractor(
     g_task_id: int | str,
     last_modified_date: str,
     contractor: str,
-) -> dict[str, Any] | None:
+) -> GTasks:
     """
     Edit task in Gandiva.
 
@@ -617,14 +622,14 @@ async def edit_task_contractor(
 @token_refresh_decorator
 async def delete_comment(
     g_comment_id: int
-) -> dict[str, Any] | None:
+) -> GTasks:
     """
     Delete a comment.
 
     :param g_comment_id: The ID of the comment to delete.
     :type g_comment_id: int
     :return: A dictionary response from the API if successful, otherwise None.
-    :rtype: dict[str, Any] | None
+    :rtype: GTasks
     """
     url = f"{gc.host}/api/Common/Comments/{g_comment_id}"
 
@@ -724,7 +729,7 @@ async def process_anomalous_tasks(
                 f"Initiator for task {task_id} has no ID!"
             )
         initiator_id = str(initiator.get('Id'))
-        department: Any = await get_department_by_user_id(initiator_id)
+        department = await get_department_by_user_id(initiator_id)
 
         if not isinstance(department, str):
             logging.warning(
@@ -840,3 +845,101 @@ async def update_contractor(
     Update the contractor of the task to the specified analyst.
     """
     return bool(await edit_task_contractor(task_id, last_modified_date, analyst_id))
+
+
+@token_refresh_decorator
+async def get_tasks_by_end_date_day(
+        year: str | int,
+        month: str | int,
+        day: str | int,
+) -> GTasks | None:
+    """
+    Get end dates of tasks for this month
+
+    :param year: number of year
+    :param month: number of month
+    :param day: number of day
+    :type year: str | int
+    :type month: str | int
+    :type day: str | int
+    :return list of task ids and  | None:
+    """
+    if isinstance(year, str):
+        if year.isdigit():
+            year = int(year)
+        else:
+            logging.error("Year has to be a number, got other symbols")
+            return
+
+    if isinstance(month, str):
+        if month.isdigit():
+            month = int(month)
+        else:
+            logging.error("Month has to be a number, got other symbols")
+            return
+
+    if isinstance(day, str):
+        if day.isdigit():
+            day = int(day)
+        else:
+            logging.error("Day has to be a number, got other symbols")
+            return
+
+    url = f"{gc.host}/api/Requests/FilterByStatusOnPeriod"
+    body: dict[str, Any] = {
+        "Filtering": {
+            "Departments": [2],
+            "Categories": [32],
+            "StatusesForPeriod": [8],
+            "CurrentStatuses": [9],
+            "BeginDate": f"{year}-{month:02d}-{day:02d}T00:00:00+03:00",
+            "EndDate": f"{year}-{month:02d}-{day+1:02d}T00:00:00+03:00"
+        },
+        "Page": 1,
+        "Size": 100,
+        "Sorting": 0,
+        "Descending": False
+    }
+
+    json_body = json.dumps(body)
+    response = await perform_http_request(
+        method='POST',
+        url=url,
+        headers=get_headers(),
+        body=json_body
+    )
+    if not (response and isinstance(response, dict)):
+        return None
+    return response
+
+
+async def get_tasks_by_end_date_month(
+        year: str | int,
+        month: str | int,
+) -> GTasks | None:
+    """
+    Get end dates of tasks for this month
+
+    :param year: number of year
+    :param month: number of month
+    :param day: number of day
+    :type year: str | int
+    :type month: str | int
+    :type day: str | int
+    :return list of task ids and  | None:
+    """
+    if isinstance(year, str):
+        if year.isdigit():
+            year = int(year)
+        else:
+            logging.error("Year has to be a number, got other symbols")
+            return
+
+    if isinstance(month, str):
+        if month.isdigit():
+            month = int(month)
+        else:
+            logging.error("Month has to be a number, got other symbols")
+            return
+
+    pass

@@ -28,7 +28,15 @@ EXCEL_UPDATED_IN_YANDEX_DISK = False
 def setup_logging(
         logging_level: str
 ) -> None:
-    """Sets up logging with a rotating file handler."""
+    """Sets up logging with a rotating file handler.
+        The logging level can be one of:
+
+        * debug
+        * info
+        * warning
+        * error
+        * critical
+        """
     handler = create_rotating_file_handler()
     handler.setFormatter(create_log_formatter())
 
@@ -111,10 +119,10 @@ def extract_task_ids(
     return task_ids
 
 
-def y_status_to_step(
+def y_status_to_id(
         y_status: str
 ) -> int | None:
-    status_to_step = {
+    status_to_id = {
         "open": 0,
         "onenew": 1,
         "twowaitingfortheanalyst": 2,
@@ -133,10 +141,10 @@ def y_status_to_step(
         "oneclosed": 15,
         "onecancelled": 16
     }
-    return status_to_step.get(y_status)
+    return status_to_id.get(y_status)
 
 
-def y_step_to_status(
+def y_id_to_status(
         y_step: str
 ) -> str | None:
     step_to_status = {

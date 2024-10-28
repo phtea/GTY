@@ -21,7 +21,7 @@ import utils
 
 # Globals
 MAX_COMMENT_LENGTH = 20_000
-TEST_FUNCTION = False
+TEST_FUNCTION = True
 
 
 async def sync_comments(
@@ -477,14 +477,16 @@ async def update_it_users_in_db(excel_obj: dict[str, DataFrame]):
     return db.add_or_update_user(session=db_session, user_data=uids_y_g)
 
 
-async def test():
-    sync_mode = 2
-    err = False
+async def test() -> tuple[Any, bool]:
+    """
+    :return result, stop:
+    """
     stop = True
-    g_tasks = await gapi.get_tasks(gapi.Statuses.in_progress)
-
-    res = await sync_comments(g_tasks, sync_mode)
-    return res, err, stop
+    day = 1
+    month = 10
+    year = 2024
+    res = await gapi.get_tasks_by_end_date_day(year, month, day)
+    return res, stop
 
 
 def db_init(db_url: str):
@@ -624,13 +626,18 @@ async def run_sync_services_periodically(
         await asyncio.sleep(interval_minutes * 60)
 
 
-async def sync_services(queue: str, sync_mode: int, board_id: str,
-                        to_get_followers: bool, use_summaries: bool):
+async def sync_services(
+        queue: str,
+        sync_mode: int,
+        board_id: str,
+        to_get_followers: bool,
+        use_summaries: bool
+) -> None:
     """
     Synchronize Gandiva and Yandex Tracker services.
     queue: working queue in Yandex Tracker.
     sync_mode: which comments to sync.
-    1 - all comments, 2 - only for programmers.
+    0 - no comments, 1 - all comments, 2 - only for programmers.
     """
 
     logging.info(f"Sync started!")
@@ -652,7 +659,8 @@ async def sync_services(queue: str, sync_mode: int, board_id: str,
 
     await handle_tasks(
         sync_mode, to_get_followers, use_summaries, g_tasks_all,
-        g_tasks_in_progress, g_tasks_waiting, y_tasks)
+        g_tasks_in_progress, g_tasks_waiting, y_tasks
+    )
 
     await yapi.create_weekly_release_sprint(board_id)
     await handle_anomalies(queue, g_tasks_in_progress, g_tasks_in_progress_or_waiting, y_tasks)
@@ -694,7 +702,7 @@ async def main():
     db_init(db_url)
 
     if TEST_FUNCTION:
-        _, _, stop = await test()
+        _, stop = await test()
         if stop:
             return
 
