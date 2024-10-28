@@ -23,6 +23,7 @@ import utils
 MAX_COMMENT_LENGTH = 20_000
 
 
+
 async def sync_comments(
         g_tasks: list[dict[str, Any]],
         sync_mode: int,
