@@ -21,7 +21,7 @@ import utils
 
 # Globals
 MAX_COMMENT_LENGTH = 20_000
-TEST_FUNCTION = True
+TEST_FUNCTION = False
 
 
 async def sync_comments(
