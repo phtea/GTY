@@ -145,9 +145,9 @@ def y_status_to_id(
 
 
 def y_id_to_status(
-        y_step: str
+        y_status_id: str
 ) -> str | None:
-    step_to_status = {
+    id_to_status = {
         "0": "open",
         "1": "onenew",
         "2": "twowaitingfortheanalyst",
@@ -166,10 +166,10 @@ def y_id_to_status(
         "15": "oneclosed",
         "16": "onecancelled"
     }
-    return step_to_status.get(y_step)
+    return id_to_status.get(y_status_id)
 
 
-def get_y_transition_from_g_status(
+def get_y_transition_from_g_status_id(
         g_status: str
 ) -> str | None:
     status_to_transition = {

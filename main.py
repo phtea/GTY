@@ -21,7 +21,7 @@ import utils
 
 # Globals
 MAX_COMMENT_LENGTH = 20_000
-TEST_FUNCTION = True
+TEST_FUNCTION = False
 
 
 async def sync_comments(
@@ -482,10 +482,10 @@ async def test() -> tuple[Any, bool]:
     :return result, stop:
     """
     stop = True
-    day = 1
     month = 10
     year = 2024
-    res = await gapi.get_tasks_by_end_date_day(year, month, day)
+    # res = await gapi.get_tasks_by_end_date_day(year, month, day)
+    res = await gapi.get_tasks_by_end_date_month(year, month)
     return res, stop
 
 

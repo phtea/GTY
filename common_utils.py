@@ -1,4 +1,6 @@
 import re
+import time
+from functools import wraps
 
 
 def normalize_department_name(
@@ -12,3 +14,15 @@ def normalize_department_name(
     :return: A normalized department name with single spaces.
     """
     return re.sub(r'\s+', ' ', department_name.replace('\u00A0', ' ')).strip()
+
+
+def async_timeit(func):
+    @wraps(func)
+    async def wrapper(*args, **kwargs):
+        start_time = time.perf_counter()
+        result = await func(*args, **kwargs)
+        end_time = time.perf_counter()
+        elapsed_time = end_time - start_time
+        print(f"{func.__name__} executed in {elapsed_time:.4f} seconds")
+        return result
+    return wrapper
