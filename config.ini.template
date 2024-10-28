@@ -8,6 +8,7 @@ interval_minutes    = 5
 to_get_followers    = False
 use_summaries       = False
 logging_level       = INFO
+test_func           = True
 
 [Gandiva]
 login                   = "login"

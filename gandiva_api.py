@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from configparser import ConfigParser
 from functools import wraps
 from typing import Callable, Awaitable, Any, TypeVar
+import calendar
 
 # SQLAlchemy Imports
 from sqlalchemy.orm import Session
@@ -852,7 +853,7 @@ async def get_tasks_by_end_date_day(
         year: str | int,
         month: str | int,
         day: str | int,
-) -> GTasks | None:
+) -> list[GTasks] | None:
     """
     Get end dates of tasks for this month
 
@@ -909,37 +910,53 @@ async def get_tasks_by_end_date_day(
         body=json_body
     )
     if not (response and isinstance(response, dict)):
-        return None
-    return response
+        return
+
+    requests = response.get('Requests')
+    if not (requests and isinstance(requests, list)):
+        return
+
+    return requests  # type: ignore
 
 
 async def get_tasks_by_end_date_month(
-        year: str | int,
-        month: str | int,
-) -> GTasks | None:
+    year: int,
+    month: int
+) -> dict[int, list[GTasks]] | None:
     """
-    Get end dates of tasks for this month
+    Extract all end dates from a desired month.
 
-    :param year: number of year
-    :param month: number of month
-    :param day: number of day
-    :type year: str | int
-    :type month: str | int
-    :type day: str | int
-    :return list of task ids and  | None:
+    :param year: The year for which to extract tasks.
+    :param month: The month (1-12) for which to extract tasks.
+    :return: A list of GTasks for the specified month, or None if an error occurred.
     """
-    if isinstance(year, str):
-        if year.isdigit():
-            year = int(year)
-        else:
-            logging.error("Year has to be a number, got other symbols")
-            return
 
-    if isinstance(month, str):
-        if month.isdigit():
-            month = int(month)
-        else:
-            logging.error("Month has to be a number, got other symbols")
-            return
+    async def get_task_by_day_with_limiter(
+            semaphore: asyncio.Semaphore,
+            year: int,
+            month: int,
+            day: int
+    ) -> list[GTasks] | None:
+        async with semaphore:
+            return await get_tasks_by_end_date_day(year, month, day)
 
-    pass
+    num_days = calendar.monthrange(year, month)[1]
+    max_concurrent_requests = gc.max_concurrent_requests or 5
+
+    # Create a semaphore to limit concurrent requests
+    semaphore = asyncio.Semaphore(max_concurrent_requests)
+
+    tasks = [
+        get_task_by_day_with_limiter(semaphore, year, month, day)
+        for day in range(1, num_days + 1)
+    ]
+
+    results = await asyncio.gather(*tasks)
+
+    # Map each day to its corresponding tasks
+    task_mapping = {
+        day: result if result is not None else []
+        for day, result in zip(range(1, num_days + 1), results)
+    }
+
+    return task_mapping if any(task_mapping.values()) else None
