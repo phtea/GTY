@@ -21,7 +21,6 @@ import utils
 
 # Globals
 MAX_COMMENT_LENGTH = 20_000
-TEST_FUNCTION = False
 
 
 async def sync_comments(
@@ -701,7 +700,8 @@ async def main():
 
     db_init(db_url)
 
-    if TEST_FUNCTION:
+    test_func = config.getboolean('Settings', 'test_func', fallback=False)
+    if test_func:
         _, stop = await test()
         if stop:
             return
